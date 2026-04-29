@@ -1,3 +1,4 @@
+import { Link, useNavigate, useSearchParams } from "react-router";
 import React, { useEffect, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -8,34 +9,27 @@ import {
   setPage,
 } from "../../redux/crm/eventSlice";
 
-import { useSearchParams, useNavigate } from "react-router";
-
-export function EventContent() {
+export default function Event() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const [params] = useSearchParams();
 
-  const BASE_URL = import.meta.env.VITE_API_BASE_URL;
+  const BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 
-  const {
-    events,
-    departments,
-    search,
-    deptSlug,
-    page,
-    perPage,
-    loading,
-  } = useSelector((s) => s.events);
+  const { events = [], departments = [], search, deptSlug, page, perPage, loading } =
+    useSelector((s) => s.events);
 
+  /* ================= FETCH ================= */
   useEffect(() => {
     dispatch(fetchEvents());
     dispatch(fetchDepartments());
   }, [dispatch]);
 
+  /* ================= DEPT FILTER FROM URL ================= */
   useEffect(() => {
     if (!departments.length) return;
 
-    const deptParam = params.get("dept");
+    const deptParam = (params.get("dept") || "").toLowerCase();
 
     if (!deptParam) {
       dispatch(setDept({}));
@@ -43,59 +37,69 @@ export function EventContent() {
     }
 
     const d = departments.find(
-      (x) => x.shortcode === deptParam.toLowerCase()
+      (x) =>
+        String(x.shortcode || "").toLowerCase() === deptParam ||
+        String(x.slug || "").toLowerCase() === deptParam
     );
 
     dispatch(setDept(d || {}));
   }, [departments, params, dispatch]);
 
+  /* ================= IMAGE FIX ================= */
+  const getImage = (item) => {
+    const raw =
+      item?.cover_image_url ||
+      item?.image_url ||
+      item?.cover_image ||
+      item?.image ||
+      "";
+
+    if (!raw) return "";
+
+    if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
+
+    if (raw.startsWith("/")) {
+      return `${BASE_URL}${raw}`;
+    }
+
+    return `${BASE_URL}/storage/${raw}`;
+  };
+
+  /* ================= FILTER ================= */
   const filtered = useMemo(() => {
-    let items = [...events];
+    let items = Array.isArray(events) ? [...events] : [];
 
     if (deptSlug) {
-      const dept = departments.find(
-        (d) => d.shortcode === deptSlug
-      );
-
       items = items.filter((e) => {
         const slug =
-          e.department_slug ||
-          e.department?.slug ||
-          "";
-
-        if (slug) {
-          return slug.toLowerCase() === deptSlug;
-        }
-
-        return (
-          dept &&
-          String(e.department_id) === String(dept.id)
-        );
+          e.department_slug || e.department?.slug || "";
+        return String(slug).toLowerCase() === deptSlug;
       });
     }
 
     if (search) {
-      const q = search.toLowerCase();
-      items = items.filter((e) =>
-        (e.title + " " + (e.description || ""))
-          .toLowerCase()
-          .includes(q)
-      );
+      const q = search.toLowerCase().trim();
+      if (q) {
+        items = items.filter(
+          (e) =>
+            (e.title || "").toLowerCase().includes(q) ||
+            (e.description || "").toLowerCase().includes(q)
+        );
+      }
     }
 
     return items;
-  }, [events, search, deptSlug, departments]);
+  }, [events, search, deptSlug]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filtered.length / perPage)
-  );
+  /* ================= PAGINATION ================= */
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
 
   const pageItems = filtered.slice(
     (page - 1) * perPage,
     page * perPage
   );
 
+  /* ================= DATE ================= */
   const formatDate = (d) =>
     d
       ? new Date(d).toLocaleDateString("en-IN", {
@@ -105,11 +109,17 @@ export function EventContent() {
         })
       : "";
 
+  /* ================= DETAIL PATH ================= */
+  const getDetailPath = (item) => {
+    return `/events/view/${item?.slug || item?.uuid || item?.id}`;
+  };
+
   return (
     <>
     <style>
       {
         `
+/* WRAPPER */
 .ntx-wrap {
   max-width: 1320px;
   margin: 18px auto 54px;
@@ -412,14 +422,18 @@ export function EventContent() {
       }
     </style>
     <div className="ntx-wrap">
-      <div className="ntx-head">
 
+      {/* HEADER */}
+      <div className="ntx-head">
         <div className="ntx-search">
           <input
             type="search"
             placeholder="Search events..."
-            value={search}
-            onChange={(e) => dispatch(setSearch(e.target.value))}
+            value={search || ""}
+            onChange={(e) => {
+              dispatch(setSearch(e.target.value));
+              dispatch(setPage(1));
+            }}
           />
         </div>
 
@@ -430,21 +444,20 @@ export function EventContent() {
               const slug = e.target.value;
 
               const d = departments.find(
-                (x) => x.shortcode === slug
+                (x) =>
+                  x.shortcode === slug ||
+                  x.slug === slug
               );
 
               dispatch(setDept(d || {}));
+              dispatch(setPage(1));
 
-              if (slug) {
-                navigate(`/events?dept=${slug}`);
-              } else {
-                navigate(`/events`);
-              }
+              navigate(slug ? `/events?dept=${slug}` : `/events`);
             }}
           >
             <option value="">All Departments</option>
             {departments.map((d) => (
-              <option key={d.uuid} value={d.shortcode}>
+              <option key={d.uuid} value={d.shortcode || d.slug}>
                 {d.title}
               </option>
             ))}
@@ -452,46 +465,65 @@ export function EventContent() {
         </div>
       </div>
 
+      {/* LOADING */}
       {loading && <div className="ntx-state">Loading events...</div>}
 
+      {/* EMPTY */}
       {!loading && pageItems.length === 0 && (
         <div className="ntx-state">No events found</div>
       )}
 
+      {/* GRID */}
       {!loading && pageItems.length > 0 && (
         <div className="ntx-grid">
-          {pageItems.map((e) => (
-            <div key={e.uuid} className="ntx-card">
+          {pageItems.map((e) => {
+            const img = getImage(e);
 
-              <div className="ntx-media">
-                {e.cover_image ? (
-                  <img
-                    src={`${BASE_URL}/${e.cover_image}`}
-                    alt={e.title}
-                  />
-                ) : (
-                  <div className="ntx-fallback">Event</div>
-                )}
-              </div>
+            return (
+              <div key={e.uuid || e.id} className="ntx-card">
 
-              <div className="ntx-body">
-                <div className="ntx-h">{e.title}</div>
-                <p className="ntx-p">{e.description}</p>
-
-                <div className="ntx-date">
-                  {formatDate(e.event_start_date)}
+                {/* IMAGE */}
+                <div className="ntx-media">
+                  {img ? (
+                    <img
+                      src={img}
+                      alt={e.title}
+                      loading="lazy"
+                      onError={(ev) => {
+                        ev.currentTarget.style.display = "none";
+                      }}
+                    />
+                  ) : (
+                    <div className="ntx-fallback">Event</div>
+                  )}
                 </div>
-              </div>
 
-              <a
-                href={`${BASE_URL}events/view/${e.slug || e.uuid}`}
-                className="ntx-link"
-              />
-            </div>
-          ))}
+                {/* BODY */}
+                <div className="ntx-body">
+                  <div className="ntx-h">{e.title}</div>
+
+                  <p className="ntx-p">
+                    {e.description || "No description available"}
+                  </p>
+
+                  <div className="ntx-date">
+                    {formatDate(e.event_start_date)}
+                  </div>
+                </div>
+
+                {/* ✅ FIXED LINK (IMPORTANT) */}
+                <Link
+  to={`/events/view/${encodeURIComponent(e.slug || e.uuid || e.id)}`}
+  className="ntx-link"
+  aria-label={`View ${e.title || "event"}`}
+/>
+              </div>
+            );
+          })}
         </div>
       )}
 
+      {/* PAGINATION */}
       {totalPages > 1 && (
         <div className="ntx-pagination">
           <button
@@ -515,5 +547,3 @@ export function EventContent() {
     </>
   );
 }
-
-export default EventContent;

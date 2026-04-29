@@ -1,4 +1,12 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation, useNavigate, useParams } from "react-router";
 import TopHeaderMenu from "@/landing/components/TopHeaderMenu";
@@ -38,7 +46,9 @@ const Notice = lazy(() => import("@/landing/crm/Notice"));
 const Event = lazy(() => import("@/landing/crm/Event"));
 const Faculty = lazy(() => import("@/landing/crm/Faculty"));
 const PlacementOfficers = lazy(() => import("@/landing/crm/PlacementOfficers"));
-const TechnicalAssistant = lazy(() => import("@/landing/crm/TechnicalAssistant"));
+const TechnicalAssistant = lazy(() =>
+  import("@/landing/crm/TechnicalAssistant")
+);
 const Alumni = lazy(() => import("@/landing/crm/Alumni"));
 const PlacedStudents = lazy(() => import("@/landing/crm/PlacedStudents"));
 const ProgramToppers = lazy(() => import("@/landing/crm/ProgramToppers"));
@@ -290,6 +300,8 @@ const MODULE_COMPONENTS = [
 
 const toText = (value) => String(value ?? "").trim();
 
+const withSearch = (pathname, search) => `${pathname}${search || ""}`;
+
 const getLastPathSegment = (pathname) => {
   const clean = String(pathname || "").split("?")[0].split("#")[0];
   const parts = clean.split("/").filter(Boolean);
@@ -326,8 +338,6 @@ const findTrail = (items, predicate, path = []) => {
   return [];
 };
 
-const withSearch = (pathname, search) => `${pathname}${search || ""}`;
-
 const stripTrailingSlash = (value) => {
   const text = toText(value);
   if (!text) return "";
@@ -346,6 +356,7 @@ const toComparableInternalPath = (value) => {
     if (typeof window !== "undefined" && url.origin !== window.location.origin) {
       return url.toString();
     }
+
     return stripTrailingSlash(
       withSearch(normalizePath(url.pathname || "/"), url.search || "")
     );
@@ -353,11 +364,30 @@ const toComparableInternalPath = (value) => {
     const [pathPart = ""] = text.split("#");
     const [pathnamePart = "", searchPart = ""] = pathPart.split("?");
     const normalizedPath = normalizePath(pathnamePart || "/");
-    const comparable = withSearch(
-      normalizedPath,
-      searchPart ? `?${searchPart}` : ""
+
+    return stripTrailingSlash(
+      withSearch(normalizedPath, searchPart ? `?${searchPart}` : "")
     );
-    return stripTrailingSlash(comparable || "/");
+  }
+};
+
+const toComparableInternalPathOnly = (value) => {
+  const text = toText(value);
+  if (!text) return "";
+
+  try {
+    const baseOrigin =
+      typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    const url = new URL(text, baseOrigin);
+    if (typeof window !== "undefined" && url.origin !== window.location.origin) {
+      return url.toString();
+    }
+
+    return stripTrailingSlash(normalizePath(url.pathname || "/"));
+  } catch {
+    const [pathPart = ""] = text.split("#");
+    const [pathnamePart = ""] = pathPart.split("?");
+    return stripTrailingSlash(normalizePath(pathnamePart || "/"));
   }
 };
 
@@ -367,15 +397,67 @@ const isSameInternalPath = (left, right) => {
   return Boolean(a && b && a === b);
 };
 
+const isSameInternalPathOnly = (left, right) => {
+  const a = toComparableInternalPathOnly(left);
+  const b = toComparableInternalPathOnly(right);
+  return Boolean(a && b && a === b);
+};
+
 const normalizeInternalHref = (href) => {
   const value = toText(href);
   if (!value) return "";
+
   try {
     const url = new URL(value, window.location.origin);
     if (url.origin !== window.location.origin) return url.toString();
     return withSearch(url.pathname, url.search);
   } catch {
     return value;
+  }
+};
+
+const getDepartmentScopeFromSearch = (search = "") => {
+  const params = new URLSearchParams(search || "");
+  return toText(
+    params.get("dept") ||
+      params.get("department") ||
+      params.get("department_slug") ||
+      params.get("departmentSlug") ||
+      ""
+  );
+};
+
+const mergeDeptIntoInternalHref = (href, dept) => {
+  const value = toText(href);
+  const departmentSlug = toText(dept);
+
+  if (!value || !departmentSlug) return value;
+  if (isSpecialProtocol(value) || isExternalUrl(value)) return value;
+
+  try {
+    const url = new URL(value, window.location.origin);
+    if (url.origin !== window.location.origin) return value;
+
+    const params = new URLSearchParams(url.search || "");
+    if (!params.get("dept")) {
+      params.set("dept", departmentSlug);
+    }
+
+    return `${url.pathname}${params.toString() ? `?${params.toString()}` : ""}${
+      url.hash || ""
+    }`;
+  } catch {
+    const [pathAndQuery = "", hash = ""] = value.split("#");
+    const [path = "", query = ""] = pathAndQuery.split("?");
+    const params = new URLSearchParams(query || "");
+
+    if (!params.get("dept")) {
+      params.set("dept", departmentSlug);
+    }
+
+    return `${path || "/"}${params.toString() ? `?${params.toString()}` : ""}${
+      hash ? `#${hash}` : ""
+    }`;
   }
 };
 
@@ -386,7 +468,8 @@ const escapeHtmlAttribute = (value) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-const escapeInlineScript = (value) => String(value ?? "").replace(/<\/script/gi, "<\\/script");
+const escapeInlineScript = (value) =>
+  String(value ?? "").replace(/<\/script/gi, "<\\/script");
 
 const BLOCKED_EDITOR_ASSET_PATTERNS = [
   /(?:^|\/)(?:main|index)\.(?:css|js)(?:[?#].*)?$/i,
@@ -402,7 +485,11 @@ const shouldBlockEditorAsset = (value) => {
   return BLOCKED_EDITOR_ASSET_PATTERNS.some((pattern) => pattern.test(asset));
 };
 
-const extractIsolatedDocumentParts = (rawHtml = "", fallbackStylesText = "", fallbackScriptsText = "") => {
+const extractIsolatedDocumentParts = (
+  rawHtml = "",
+  fallbackStylesText = "",
+  fallbackScriptsText = ""
+) => {
   const htmlText = String(rawHtml ?? "");
   const collectedStyles = [];
   const collectedScripts = [];
@@ -533,7 +620,10 @@ function IsolatedHtmlFrame({ frameKey, documentData, onInternalNavigate }) {
     );
 
     const styleLinks = externalStyleHrefs
-      .map((href) => `<link rel="stylesheet" href="${escapeHtmlAttribute(href)}" />`)
+      .map(
+        (href) =>
+          `<link rel="stylesheet" href="${escapeHtmlAttribute(href)}" />`
+      )
       .join("\n");
 
     const scriptTags = [
@@ -642,6 +732,7 @@ function IsolatedHtmlFrame({ frameKey, documentData, onInternalNavigate }) {
   useEffect(() => {
     const handleMessage = (event) => {
       if (event.source !== iframeRef.current?.contentWindow) return;
+
       const data = event.data || {};
       if (data?.channel !== channelRef.current) return;
 
@@ -649,7 +740,11 @@ function IsolatedHtmlFrame({ frameKey, documentData, onInternalNavigate }) {
         setHeight(Math.max(240, Number(data.height || 0) || 0));
       }
 
-      if (data?.type === "dp-frame-nav" && data.href && typeof onInternalNavigate === "function") {
+      if (
+        data?.type === "dp-frame-nav" &&
+        data.href &&
+        typeof onInternalNavigate === "function"
+      ) {
         onInternalNavigate(String(data.href));
       }
     };
@@ -689,16 +784,30 @@ export default function DynamicPage() {
     () => withSearch(pathname, location.search || ""),
     [pathname, location.search]
   );
+
+  const departmentScope = useMemo(
+    () => getDepartmentScopeFromSearch(location.search || ""),
+    [location.search]
+  );
+
   const rawParamSlug = toText(params.slug);
   const slugFromPath = toText(getCurrentSlugFromPath(pathname));
-  const routeSlug = rawParamSlug || (slugFromPath !== "__HOME__" ? slugFromPath : "");
+  const routeSlug =
+    rawParamSlug || (slugFromPath !== "__HOME__" ? slugFromPath : "");
+
   const legacyQuerySubmenu = toText(
     new URLSearchParams(location.search || "").get("submenu") || ""
   );
-  const submenuScopeKey = useMemo(() => `dynamic-submenu:${pathname}`, [pathname]);
+
+  const submenuScopeKey = useMemo(
+    () => `dynamic-submenu:${pathname}:dept:${departmentScope || "__default__"}`,
+    [pathname, departmentScope]
+  );
+
   const selectedSubmenuSlug = useSelector((state) =>
     selectActiveDynamicSubmenu(state, submenuScopeKey)
   );
+
   const activeSubmenuSlug = toText(selectedSubmenuSlug || legacyQuerySubmenu);
 
   useEffect(() => {
@@ -719,10 +828,12 @@ export default function DynamicPage() {
 
     const params = new URLSearchParams(location.search || "");
     params.delete("submenu");
+
     const nextSearch = params.toString();
-    navigate(`${pathname}${nextSearch ? `?${nextSearch}` : ""}${location.hash || ""}`, {
-      replace: true,
-    });
+    navigate(
+      `${pathname}${nextSearch ? `?${nextSearch}` : ""}${location.hash || ""}`,
+      { replace: true }
+    );
   }, [
     dispatch,
     legacyQuerySubmenu,
@@ -739,18 +850,24 @@ export default function DynamicPage() {
     };
   }, [dispatch, submenuScopeKey]);
 
-  const normalizedMenus = useMemo(() => sortByPosition(moduleHeader.menus || []), [moduleHeader.menus]);
+  const normalizedMenus = useMemo(
+    () => sortByPosition(moduleHeader.menus || []),
+    [moduleHeader.menus]
+  );
 
   const inferredHeaderMenu = useMemo(() => {
     const currentComparablePath = toComparableInternalPath(currentPath);
     const currentComparableBare = toComparableInternalPath(pathname);
+    const currentComparablePathOnly = toComparableInternalPathOnly(pathname);
 
     const allNodes = flattenTree(normalizedMenus, []);
+
     for (const node of allNodes) {
       const candidates = [
         normalizeInternalHref(resolveLinkUrl(node?.pageUrl || node?.page_url || "")),
         toText(node?.pageUrl || node?.page_url || node?.link || node?.url || node?.href),
         node?.pageSlug ? `/page/${encodeURIComponent(node.pageSlug)}` : "",
+        node?.page_slug ? `/page/${encodeURIComponent(node.page_slug)}` : "",
         node?.slug ? `/page/${encodeURIComponent(node.slug)}` : "",
         node?.shortcode ? `/view/${encodeURIComponent(node.shortcode)}` : "",
       ]
@@ -761,12 +878,15 @@ export default function DynamicPage() {
         candidates.some(
           (item) =>
             isSameInternalPath(item, currentComparablePath) ||
-            isSameInternalPath(item, currentComparableBare)
+            isSameInternalPath(item, currentComparableBare) ||
+            isSameInternalPathOnly(item, currentComparablePathOnly)
         )
       ) {
         return node;
       }
+    }
 
+    for (const node of allNodes) {
       const slugCandidates = [
         toText(node?.pageSlug || node?.page_slug),
         toText(node?.slug),
@@ -784,6 +904,7 @@ export default function DynamicPage() {
   const effectivePageSlug = useMemo(() => {
     return toText(
       inferredHeaderMenu?.pageSlug ||
+        inferredHeaderMenu?.page_slug ||
         routeSlug ||
         inferredHeaderMenu?.slug ||
         inferredHeaderMenu?.shortcode
@@ -793,8 +914,8 @@ export default function DynamicPage() {
   const pageResolveCandidates = useMemo(
     () =>
       [
-        currentPath,
         pathname,
+        currentPath,
         normalizeInternalHref(
           resolveLinkUrl(
             inferredHeaderMenu?.pageUrl ||
@@ -813,25 +934,35 @@ export default function DynamicPage() {
             inferredHeaderMenu?.href
         ),
       ].filter(Boolean),
-    [currentPath, pathname, inferredHeaderMenu]
+    [pathname, currentPath, inferredHeaderMenu]
   );
 
   const pageInput = useMemo(
     () => ({
       slug: effectivePageSlug,
-      path: currentPath,
+      path: pathname,
+      fullPath: currentPath,
+      departmentSlug: departmentScope,
       extraCandidates: pageResolveCandidates,
     }),
-    [effectivePageSlug, currentPath, pageResolveCandidates]
+    [
+      effectivePageSlug,
+      pathname,
+      currentPath,
+      departmentScope,
+      pageResolveCandidates,
+    ]
   );
 
   const pageBlock = useSelector((state) =>
     selectDynamicPageBlock(state, pageInput)
   );
+
   const page = pageBlock.data;
 
   useEffect(() => {
     if (pathname === "/") return;
+
     if (
       moduleHeader.status === "loading" &&
       !effectivePageSlug &&
@@ -852,16 +983,20 @@ export default function DynamicPage() {
 
   const treeInput = useMemo(() => {
     if (!page && !inferredHeaderMenu) return null;
+
     return {
       pageId: page?.id || "",
       pageSlug: page?.slug || page?.page_slug || effectivePageSlug || "",
       headerMenuId: inferredHeaderMenu?.id || "",
       headerUuid: inferredHeaderMenu?.uuid || "",
+      departmentSlug: departmentScope,
     };
-  }, [page, inferredHeaderMenu, effectivePageSlug]);
+  }, [page, inferredHeaderMenu, effectivePageSlug, departmentScope]);
 
   const treeBlock = useSelector((state) =>
-    treeInput ? selectDynamicTreeBlock(state, treeInput) : { status: "idle", data: [], scope: null, error: "" }
+    treeInput
+      ? selectDynamicTreeBlock(state, treeInput)
+      : { status: "idle", data: [], scope: null, error: "" }
   );
 
   useEffect(() => {
@@ -869,21 +1004,34 @@ export default function DynamicPage() {
     dispatch(fetchDynamicSubmenuTree({ ...treeInput, force: true }));
   }, [dispatch, treeInput]);
 
-  const treeData = useMemo(() => sortByPosition(treeBlock.data || []), [treeBlock.data]);
+  const treeData = useMemo(
+    () => sortByPosition(treeBlock.data || []),
+    [treeBlock.data]
+  );
 
   const trailToActive = useMemo(() => {
     if (!activeSubmenuSlug) return [];
-    return findTrail(treeData, (node) => toText(node?.slug) === activeSubmenuSlug);
+    return findTrail(
+      treeData,
+      (node) => toText(node?.slug) === activeSubmenuSlug
+    );
   }, [treeData, activeSubmenuSlug]);
 
   const activeNode = useMemo(() => {
     if (!activeSubmenuSlug) return null;
-    return flattenTree(treeData, []).find((item) => toText(item?.slug) === activeSubmenuSlug) || null;
+
+    return (
+      flattenTree(treeData, []).find(
+        (item) => toText(item?.slug) === activeSubmenuSlug
+      ) || null
+    );
   }, [treeData, activeSubmenuSlug]);
 
   const renderInput = useMemo(() => {
     if (!activeSubmenuSlug) return null;
+
     const scope = treeBlock.scope || {};
+
     return {
       slug: activeSubmenuSlug,
       pageId: page?.id || scope?.page_id || "",
@@ -898,11 +1046,21 @@ export default function DynamicPage() {
         scope?.header_uuid ||
         inferredHeaderMenu?.uuid ||
         "",
+      departmentSlug: departmentScope,
     };
-  }, [activeSubmenuSlug, treeBlock.scope, page, effectivePageSlug, inferredHeaderMenu]);
+  }, [
+    activeSubmenuSlug,
+    treeBlock.scope,
+    page,
+    effectivePageSlug,
+    inferredHeaderMenu,
+    departmentScope,
+  ]);
 
   const renderBlock = useSelector((state) =>
-    renderInput ? selectDynamicRenderBlock(state, renderInput) : { status: "idle", data: null, error: "" }
+    renderInput
+      ? selectDynamicRenderBlock(state, renderInput)
+      : { status: "idle", data: null, error: "" }
   );
 
   useEffect(() => {
@@ -911,6 +1069,7 @@ export default function DynamicPage() {
   }, [dispatch, renderInput]);
 
   const payload = renderBlock.data || null;
+
   const cardTitle = toText(
     payload?.title ||
       activeNode?.title ||
@@ -951,9 +1110,11 @@ export default function DynamicPage() {
 
   const openIds = useMemo(() => {
     const next = new Set(Array.from(manualOpenIds));
+
     for (const item of trailToActive) {
       next.add(item.id);
     }
+
     return next;
   }, [manualOpenIds, trailToActive]);
 
@@ -967,18 +1128,29 @@ export default function DynamicPage() {
     if (!resolved) return;
 
     if (isSameOrigin(resolved) && !isExternalUrl(resolved)) {
-      navigate(resolved, { replace: false });
+      navigate(mergeDeptIntoInternalHref(resolved, departmentScope), {
+        replace: false,
+      });
       return;
     }
 
     window.open(rawUrl, "_blank", "noopener,noreferrer");
-  }, [payload, navigate]);
+  }, [payload, navigate, departmentScope]);
+
+  const handleInternalFrameNavigate = useCallback(
+    (href) => {
+      navigate(mergeDeptIntoInternalHref(href, departmentScope));
+    },
+    [navigate, departmentScope]
+  );
 
   const toggleOpen = (id) => {
     setManualOpenIds((prev) => {
       const next = new Set(prev);
+
       if (next.has(id)) next.delete(id);
       else next.add(id);
+
       return next;
     });
   };
@@ -996,7 +1168,8 @@ export default function DynamicPage() {
   };
 
   const handleNodeClick = (event, node) => {
-    const rawUrl = toText(node?.page_url);
+    const rawUrl = toText(node?.page_url || node?.pageUrl);
+
     if (rawUrl && (isSpecialProtocol(rawUrl) || isExternalUrl(rawUrl))) {
       return;
     }
@@ -1007,12 +1180,14 @@ export default function DynamicPage() {
 
   const renderTreeNodes = (items, level = 0) =>
     sortByPosition(items).map((node) => {
-      const hasChildren = Array.isArray(node?.children) && node.children.length > 0;
+      const hasChildren =
+        Array.isArray(node?.children) && node.children.length > 0;
       const isOpen = openIds.has(node.id);
       const isActive = toText(node?.slug) === activeSubmenuSlug;
       const rawUrl = toText(node?.page_url || node?.pageUrl);
 
       let href = pathname || "/";
+
       if (rawUrl && (isSpecialProtocol(rawUrl) || isExternalUrl(rawUrl))) {
         href = resolveLinkUrl(rawUrl) || rawUrl;
       }
@@ -1047,7 +1222,9 @@ export default function DynamicPage() {
           </div>
 
           {hasChildren ? (
-            <ul className="hallienz-side__children">{renderTreeNodes(node.children, level + 1)}</ul>
+            <ul className="hallienz-side__children">
+              {renderTreeNodes(node.children, level + 1)}
+            </ul>
           ) : null}
         </li>
       );
@@ -1090,24 +1267,21 @@ export default function DynamicPage() {
   const showSidebar = treeBlock.status === "loading" || treeData.length > 0;
   const showPageLoading = pageBlock.status === "loading" && !page;
   const showPageMissing = pageBlock.status === "failed" && !page;
+
   const showSubmenuComingSoon =
     Boolean(activeSubmenuSlug) &&
     renderBlock.status === "failed" &&
     !mappedComponent;
-  const pageErrorText = toText(pageBlock.error || pageBlock?.message || "");
+
   const requestedPageSlug = toText(
-    routeSlug || currentPath || page?.slug || page?.page_slug || getLastPathSegment(pathname)
+    pathname || routeSlug || page?.slug || page?.page_slug || getLastPathSegment(pathname)
   );
+
   const requestedSubmenuSlug = toText(activeSubmenuSlug);
-  const isNotFoundState = /(?:^|\b)(404|not found|page not found|missing)(?:\b|$)/i.test(pageErrorText);
   const showBusyOverlay = showPageLoading;
 
   const mainContent = showPageMissing ? (
-    isNotFoundState ? (
-      <PageNotFound slug={requestedPageSlug} />
-    ) : (
-      <ComingSoon slug={requestedPageSlug} />
-    )
+    <PageNotFound slug={requestedPageSlug} />
   ) : showSubmenuComingSoon ? (
     <ComingSoon slug={requestedSubmenuSlug} />
   ) : (
@@ -1126,9 +1300,13 @@ export default function DynamicPage() {
           </div>
         ) : (
           <IsolatedHtmlFrame
-            frameKey={`${pathname}|${activeSubmenuSlug || "page"}|${cardTitle}`}
-            documentData={htmlFrameData || { html: "", stylesText: "", scriptsText: "" }}
-            onInternalNavigate={(href) => navigate(href)}
+            frameKey={`${pathname}|dept:${departmentScope || "default"}|${
+              activeSubmenuSlug || "page"
+            }|${cardTitle}`}
+            documentData={
+              htmlFrameData || { html: "", stylesText: "", scriptsText: "" }
+            }
+            onInternalNavigate={handleInternalFrameNavigate}
           />
         )}
       </div>
@@ -1138,7 +1316,9 @@ export default function DynamicPage() {
   return (
     <div className="dp-page">
       <style>{styles}</style>
+
       <Overlay show={showBusyOverlay} />
+
       <TopHeaderMenu />
       <MainHeader />
       <HeaderMenu />
@@ -1146,13 +1326,19 @@ export default function DynamicPage() {
       <main className="dp-main">
         <div className="dp-shell">
           <div className={`dp-grid ${!showSidebar ? "dp-full" : ""}`}>
-            <aside className={`dp-sidebar-col ${!showSidebar ? "is-hidden" : ""}`}>
+            <aside
+              className={`dp-sidebar-col ${!showSidebar ? "is-hidden" : ""}`}
+            >
               {treeBlock.status === "loading" && !treeData.length ? (
                 <SidebarSkeleton />
               ) : treeData.length ? (
                 <div id="sidebarCard" className="hallienz-side dp-sticky">
-                  <div className="hallienz-side__head">{toText(page?.title || page?.page_title || "Menu")}</div>
-                  <ul className="hallienz-side__list">{renderTreeNodes(treeData)}</ul>
+                  <div className="hallienz-side__head">
+                    {toText(page?.title || page?.page_title || "Menu")}
+                  </div>
+                  <ul className="hallienz-side__list">
+                    {renderTreeNodes(treeData)}
+                  </ul>
                 </div>
               ) : null}
             </aside>

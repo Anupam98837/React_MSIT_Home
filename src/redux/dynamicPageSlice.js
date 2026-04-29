@@ -10,6 +10,8 @@ const PAGE_BLOCK = () =>
   createAsyncState({
     data: null,
     isFetching: false,
+    statusCode: 0,
+    notFound: false,
   });
 
 const TREE_BLOCK = () =>
@@ -32,10 +34,19 @@ const normalizeKeyPart = (value) => {
   return text || "__none__";
 };
 
-const makePageKey = ({ slug = "", path = "" } = {}) =>
-  `page:${normalizeKeyPart(slug)}|path:${normalizeKeyPart(path)}`;
+const makePageKey = ({ slug = "", path = "", dept = "" } = {}) =>
+  [
+    `page:${normalizeKeyPart(slug)}`,
+    `path:${normalizeKeyPart(path)}`,
+    `dept:${normalizeKeyPart(dept)}`,
+  ].join("|");
 
-const makeTreeKey = ({ pageId = "", pageSlug = "", headerMenuId = "", headerUuid = "" } = {}) =>
+const makeTreeKey = ({
+  pageId = "",
+  pageSlug = "",
+  headerMenuId = "",
+  headerUuid = "",
+} = {}) =>
   [
     `pageId:${normalizeKeyPart(pageId)}`,
     `pageSlug:${normalizeKeyPart(pageSlug)}`,
@@ -72,51 +83,72 @@ const safeDecodeText = (value) => {
   }
 };
 
-const collectPathCandidates = (value, bucket) => {
+const stripOrigin = (value) => toText(value).replace(/^https?:\/\/[^/]+/i, "");
+
+const stripHash = (value) => stripOrigin(value).split("#")[0] || "";
+
+const stripQuery = (value) => stripHash(value).split("?")[0] || "";
+
+const stripTrailingSlash = (value) => {
+  const text = toText(value);
+  if (!text) return "";
+  if (text === "/") return "/";
+  return text.replace(/\/+$/g, "") || "/";
+};
+
+const getLastSegment = (value) => {
+  const clean = stripQuery(value).replace(/^\/+|\/+$/g, "");
+  const parts = clean.split("/").filter(Boolean);
+  return parts.length ? safeDecodeText(parts[parts.length - 1]) : "";
+};
+
+const getSearchFromValue = (value) => {
+  const clean = stripHash(value);
+  const index = clean.indexOf("?");
+  return index >= 0 ? clean.slice(index + 1) : "";
+};
+
+const getSearchParamFromValue = (value, key) => {
+  const search = getSearchFromValue(value);
+  if (!search) return "";
+
+  try {
+    return toText(new URLSearchParams(search).get(key));
+  } catch {
+    return "";
+  }
+};
+
+const collectCleanLinkCandidates = (value, bucket) => {
   const raw = toText(value);
   if (!raw) return;
 
-  const strippedOrigin = raw.replace(/^https?:\/\/[^/]+/i, "");
-  const withoutHash = strippedOrigin.split("#")[0] || "";
-  const withoutQuery = withoutHash.split("?")[0] || "";
-  const decodedRaw = safeDecodeText(strippedOrigin || "");
-  const decodedWithoutQuery = safeDecodeText(withoutQuery || "");
-  const trimmed = withoutQuery.replace(/^\/+|\/+$/g, "");
-  const decodedTrimmed = decodedWithoutQuery.replace(/^\/+|\/+$/g, "");
-
-  const normalizedLeadingSlash =
-    withoutQuery && withoutQuery.startsWith("/") ? withoutQuery : trimmed ? `/${trimmed}` : "";
-
-  const segments = trimmed ? trimmed.split("/").filter(Boolean) : [];
-  const decodedSegments = decodedTrimmed ? decodedTrimmed.split("/").filter(Boolean) : [];
-  const lastSegment = segments.length ? segments[segments.length - 1] : "";
-  const decodedLastSegment = decodedSegments.length ? decodedSegments[decodedSegments.length - 1] : "";
+  const cleanPath = stripQuery(raw);
+  const decodedPath = safeDecodeText(cleanPath);
+  const trimmed = cleanPath.replace(/^\/+|\/+$/g, "");
+  const decodedTrimmed = decodedPath.replace(/^\/+|\/+$/g, "");
+  const noTrail = stripTrailingSlash(cleanPath || "/");
+  const trail = noTrail === "/" ? "/" : `${noTrail}/`;
+  const noTrailNoSlash = noTrail.replace(/^\/+/, "");
+  const trailNoSlash = trail.replace(/^\/+/, "");
 
   [
-    raw,
-    strippedOrigin,
-    decodedRaw,
-    withoutQuery,
-    decodedWithoutQuery,
-    trimmed,
+    noTrail,
+    noTrailNoSlash,
+    trail,
+    trailNoSlash,
+    decodedPath,
     decodedTrimmed,
-    normalizedLeadingSlash,
     decodedTrimmed ? `/${decodedTrimmed}` : "",
-    lastSegment,
-    decodedLastSegment,
-    segments[0] === "page" && segments[1] ? segments.slice(1).join("/") : "",
-    segments[0] === "page" && segments[1] ? `/${segments.slice(1).join("/")}` : "",
-    segments[0] === "page" && segments[1] ? segments[1] : "",
-    decodedSegments[0] === "page" && decodedSegments[1] ? decodedSegments.slice(1).join("/") : "",
-    decodedSegments[0] === "page" && decodedSegments[1] ? `/${decodedSegments.slice(1).join("/")}` : "",
-    decodedSegments[0] === "page" && decodedSegments[1] ? decodedSegments[1] : "",
-    segments[0] === "view" && segments[1] ? segments.slice(1).join("/") : "",
-    segments[0] === "view" && segments[1] ? `/${segments.slice(1).join("/")}` : "",
-    segments[0] === "view" && segments[1] ? segments[1] : "",
-    decodedSegments[0] === "view" && decodedSegments[1] ? decodedSegments.slice(1).join("/") : "",
-    decodedSegments[0] === "view" && decodedSegments[1] ? `/${decodedSegments.slice(1).join("/")}` : "",
-    decodedSegments[0] === "view" && decodedSegments[1] ? decodedSegments[1] : "",
+    getLastSegment(cleanPath),
   ].forEach((item) => pushUniqueText(bucket, item));
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    [
+      `${window.location.origin}${noTrail}`,
+      `${window.location.origin}${trail}`,
+    ].forEach((item) => pushUniqueText(bucket, item));
+  }
 };
 
 const buildPageResolveCandidates = ({
@@ -125,14 +157,48 @@ const buildPageResolveCandidates = ({
   extraCandidates = [],
 } = {}) => {
   const candidates = [];
-  pushUniqueText(candidates, slug);
-  collectPathCandidates(path, candidates);
+
+  // Must match Blade behavior:
+  // current clean URL/page_url first, slug only as final fallback.
+  collectCleanLinkCandidates(path, candidates);
 
   for (const item of Array.isArray(extraCandidates) ? extraCandidates : []) {
-    collectPathCandidates(item, candidates);
+    collectCleanLinkCandidates(item, candidates);
   }
 
+  pushUniqueText(candidates, slug);
+
   return candidates;
+};
+
+const getErrorStatus = (error) =>
+  Number(
+    error?.status ||
+      error?.statusCode ||
+      error?.response?.status ||
+      error?.data?.status ||
+      0
+  ) || 0;
+
+const isNotFoundMessage = (value) =>
+  /(?:^|\b)(404|not found|page not found|missing)(?:\b|$)/i.test(toText(value));
+
+const isUsablePage = (page) => {
+  if (!page || typeof page !== "object" || Array.isArray(page)) return false;
+  if (page.success === false) return false;
+
+  return Boolean(
+    page.id ||
+      page.uuid ||
+      page.slug ||
+      page.page_slug ||
+      page.page_url ||
+      page.page_link ||
+      page.title ||
+      page.page_title ||
+      page.content_html ||
+      page.html
+  );
 };
 
 const normalizeTreeNode = (item) => {
@@ -183,6 +249,7 @@ const buildHeaderAncestorChain = (menus, input = {}) => {
 
   const byId = new Map();
   const byUuid = new Map();
+
   for (const item of flat) {
     const id = Number(item?.id || 0);
     const uuid = toText(item?.uuid);
@@ -253,6 +320,7 @@ const buildTreeAttempts = (input, headerChain) => {
         headerMenuId: header.headerMenuId,
         headerUuid: header.headerUuid,
       });
+
       push({
         mode: "header",
         headerMenuId: header.headerMenuId,
@@ -340,10 +408,16 @@ const buildScopeMeta = (payloadScope, attempt) => ({
   ...(payloadScope && typeof payloadScope === "object" ? payloadScope : {}),
   requested_header_menu_id: toText(attempt?.headerMenuId),
   requested_header_uuid: toText(attempt?.headerUuid),
-  effective_header_menu_id:
-    toText(payloadScope?.effective_header_menu_id || payloadScope?.header_menu_id || attempt?.headerMenuId),
-  effective_header_uuid:
-    toText(payloadScope?.effective_header_uuid || payloadScope?.header_uuid || attempt?.headerUuid),
+  effective_header_menu_id: toText(
+    payloadScope?.effective_header_menu_id ||
+      payloadScope?.header_menu_id ||
+      attempt?.headerMenuId
+  ),
+  effective_header_uuid: toText(
+    payloadScope?.effective_header_uuid ||
+      payloadScope?.header_uuid ||
+      attempt?.headerUuid
+  ),
   page_id: toText(payloadScope?.page_id || attempt?.pageId),
   page_slug: toText(payloadScope?.page_slug || attempt?.pageSlug),
 });
@@ -353,25 +427,49 @@ export const fetchDynamicPage = createAsyncThunk(
   async (input, { rejectWithValue }) => {
     const key = makePageKey(input);
     const candidates = buildPageResolveCandidates(input);
+    const dept =
+      toText(input?.dept) ||
+      candidates.map((item) => getSearchParamFromValue(item, "dept")).find(Boolean) ||
+      "";
 
     if (!candidates.length) {
-      return rejectWithValue({ key, message: "Page slug is missing" });
+      return rejectWithValue({
+        key,
+        message: "Page link is missing",
+        statusCode: 404,
+        notFound: true,
+      });
     }
 
     let lastError = "Page not found";
+    let lastStatus = 404;
 
     for (const candidate of candidates) {
       try {
-        const payload = await fetchJson(
-          `/api/public/pages/resolve?slug=${encodeURIComponent(candidate)}`,
-          {
-            skipMemoryCache: Boolean(input?.force),
-            cache: input?.force ? "no-store" : "default",
-          }
-        );
+        const params = new URLSearchParams();
+
+        // Keep old backend compatibility: resolve endpoint already accepted `slug`.
+        // Candidate order is now page_url/link-first, then slug fallback.
+        params.set("slug", candidate);
+
+        // Extra params help if backend now supports link/path directly.
+        params.set("link", candidate);
+        params.set("path", candidate);
+        params.set("page_url", candidate);
+
+        if (dept) {
+          params.set("dept", dept);
+          params.set("department_slug", dept);
+        }
+
+        const payload = await fetchJson(`/api/public/pages/resolve?${params.toString()}`, {
+          skipMemoryCache: Boolean(input?.force),
+          cache: input?.force ? "no-store" : "default",
+        });
 
         const page = payload?.data || payload?.page || payload || null;
-        if (page && typeof page === "object") {
+
+        if (isUsablePage(page)) {
           return {
             key,
             candidate,
@@ -379,11 +477,17 @@ export const fetchDynamicPage = createAsyncThunk(
           };
         }
       } catch (error) {
+        lastStatus = getErrorStatus(error) || lastStatus;
         lastError = error?.message || "Page not found";
       }
     }
 
-    return rejectWithValue({ key, message: lastError || "Page not found" });
+    return rejectWithValue({
+      key,
+      message: lastError || "Page not found",
+      statusCode: lastStatus || 404,
+      notFound: lastStatus === 404 || isNotFoundMessage(lastError),
+    });
   },
   {
     condition: (input, { getState }) => {
@@ -398,7 +502,10 @@ export const fetchDynamicSubmenuTree = createAsyncThunk(
   "dynamicPage/fetchDynamicSubmenuTree",
   async (input, { rejectWithValue, getState }) => {
     const key = makeTreeKey(input);
-    const headerChain = buildHeaderAncestorChain(getState()?.header?.moduleHeader?.menus, input);
+    const headerChain = buildHeaderAncestorChain(
+      getState()?.header?.moduleHeader?.menus,
+      input
+    );
     const attempts = buildTreeAttempts(input, headerChain);
 
     if (!attempts.length) {
@@ -410,6 +517,7 @@ export const fetchDynamicSubmenuTree = createAsyncThunk(
 
     for (const attempt of attempts) {
       const params = new URLSearchParams();
+
       if (attempt.pageId) params.set("page_id", String(attempt.pageId));
       else if (attempt.pageSlug) params.set("page_slug", String(attempt.pageSlug));
 
@@ -421,6 +529,7 @@ export const fetchDynamicSubmenuTree = createAsyncThunk(
           skipMemoryCache: Boolean(input?.force),
           cache: input?.force ? "no-store" : "default",
         });
+
         const data = normalizeTreePayload(payload);
         const scope = buildScopeMeta(payload?.scope, attempt);
         lastScope = scope;
@@ -462,7 +571,10 @@ export const fetchDynamicRenderedSubmenu = createAsyncThunk(
       return rejectWithValue({ key, message: "Submenu slug is missing" });
     }
 
-    const headerChain = buildHeaderAncestorChain(getState()?.header?.moduleHeader?.menus, input);
+    const headerChain = buildHeaderAncestorChain(
+      getState()?.header?.moduleHeader?.menus,
+      input
+    );
     const attempts = buildRenderAttempts(input, headerChain);
     let lastError = "Failed to load submenu";
 
@@ -481,6 +593,7 @@ export const fetchDynamicRenderedSubmenu = createAsyncThunk(
           skipMemoryCache: Boolean(input?.force),
           cache: input?.force ? "no-store" : "default",
         });
+
         return {
           key,
           data: payload?.data || payload || null,
@@ -516,14 +629,18 @@ const upsertPending = (bucket, key, factory, { preserveData = false } = {}) => {
 
   bucket[key].error = "";
   bucket[key].isFetching = true;
+  bucket[key].statusCode = 0;
+  bucket[key].notFound = false;
 
   if (preserveData) {
     const hasRenderableData =
       (Array.isArray(bucket[key].data) && bucket[key].data.length > 0) ||
       (bucket[key].data && !Array.isArray(bucket[key].data));
+
     if (!hasRenderableData) {
       bucket[key].status = "loading";
     }
+
     return;
   }
 
@@ -560,26 +677,41 @@ const dynamicPageSlice = createSlice({
       .addCase(fetchDynamicPage.fulfilled, (state, action) => {
         const key = toText(action.payload?.key);
         if (!key) return;
+
         state.pagesByKey[key] = {
           status: "succeeded",
           error: "",
           loadedAt: Date.now(),
           data: action.payload?.data || null,
           isFetching: false,
+          statusCode: 200,
+          notFound: false,
         };
       })
       .addCase(fetchDynamicPage.rejected, (state, action) => {
         const key = toText(action.payload?.key || makePageKey(action.meta.arg));
         if (!key) return;
+
+        const message =
+          action.payload?.message ||
+          action.error?.message ||
+          "Page not found";
+
+        const statusCode =
+          Number(action.payload?.statusCode || 0) ||
+          (isNotFoundMessage(message) ? 404 : 0);
+
         state.pagesByKey[key] = {
           status: "failed",
-          error:
-            action.payload?.message ||
-            action.error?.message ||
-            "Failed to fetch page",
+          error: message,
           loadedAt: 0,
           data: null,
           isFetching: false,
+          statusCode,
+          notFound:
+            Boolean(action.payload?.notFound) ||
+            statusCode === 404 ||
+            isNotFoundMessage(message),
         };
       })
       .addCase(fetchDynamicSubmenuTree.pending, (state, action) => {
@@ -589,6 +721,7 @@ const dynamicPageSlice = createSlice({
       .addCase(fetchDynamicSubmenuTree.fulfilled, (state, action) => {
         const key = toText(action.payload?.key);
         if (!key) return;
+
         state.treesByKey[key] = {
           status: "succeeded",
           error: "",
@@ -601,7 +734,9 @@ const dynamicPageSlice = createSlice({
       .addCase(fetchDynamicSubmenuTree.rejected, (state, action) => {
         const key = toText(action.payload?.key || makeTreeKey(action.meta.arg));
         if (!key) return;
+
         const prev = state.treesByKey[key] || TREE_BLOCK();
+
         state.treesByKey[key] = {
           ...prev,
           status: prev.data?.length ? "succeeded" : "failed",
@@ -619,6 +754,7 @@ const dynamicPageSlice = createSlice({
       .addCase(fetchDynamicRenderedSubmenu.fulfilled, (state, action) => {
         const key = toText(action.payload?.key);
         if (!key) return;
+
         state.rendersByKey[key] = {
           status: "succeeded",
           error: "",
@@ -631,7 +767,9 @@ const dynamicPageSlice = createSlice({
       .addCase(fetchDynamicRenderedSubmenu.rejected, (state, action) => {
         const key = toText(action.payload?.key || makeRenderKey(action.meta.arg));
         if (!key) return;
+
         const prev = state.rendersByKey[key] || RENDER_BLOCK();
+
         state.rendersByKey[key] = {
           ...prev,
           status: prev.data ? "succeeded" : "failed",
@@ -672,10 +810,10 @@ export const selectDynamicRenderBlock = (state, input) => {
   return state.dynamicPage?.rendersByKey?.[key] || RENDER_BLOCK();
 };
 
-export default dynamicPageSlice.reducer;
-
 export const selectActiveDynamicSubmenu = (state, scopeKey) => {
   const key = toText(scopeKey);
   if (!key) return "";
   return toText(state.dynamicPage?.activeSubmenuByScope?.[key]);
 };
+
+export default dynamicPageSlice.reducer;

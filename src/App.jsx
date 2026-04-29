@@ -34,6 +34,7 @@ const ViewStudentActivity = lazy(() => import("./landing/crm/single/ViewStudentA
 const ViewScholarship = lazy(() => import("./landing/crm/single/ViewScholarship"));
 const ViewSuccessStories = lazy(() => import("./landing/crm/single/ViewSuccessStories"));
 const ViewWhyUs = lazy(() => import("./landing/crm/single/ViewWhyUs"));
+const ViewEvent = lazy(() => import("./landing/crm/single/ViewEvent"));
 
 export default function App() {
   return (
@@ -63,9 +64,9 @@ export default function App() {
         <Route path="/student-activities" element={<StudentActivities />} />
         <Route path="/courses" element={<Courses />} />
         <Route path="/gallery" element={<Gallery />} />
-        <Route path="/user/profile/:slug" element={<UserProfile />} />
-        <Route path="*" element={<DynamicPage />} />
+        <Route path="/user/profile/:identifier" element={<UserProfile />} />
 
+        <Route path="/events/view/:slug" element={<ViewEvent />} />
         <Route path="/achievements/view/:slug" element={<ViewAchievement />} />
         <Route path="/announcements/view/:slug" element={<ViewAnnouncement />} />
         <Route path="/career-notices/view/:slug" element={<ViewCareerNotice />} />
@@ -75,6 +76,8 @@ export default function App() {
         <Route path="/scholarships/view/:slug" element={<ViewScholarship />} />
         <Route path="/success-stories/view/:slug" element={<ViewSuccessStories />} />
         <Route path="/why-us/view/:slug" element={<ViewWhyUs />} />
+
+        <Route path="*" element={<DynamicPage />} />
       </Routes>
     </Suspense>
   );

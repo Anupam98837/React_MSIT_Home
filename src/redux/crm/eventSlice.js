@@ -27,6 +27,12 @@ const mapDepartment = (d) => ({
     .replace(/\s+/g, "-"),
 });
 
+const normalizeImage = (img) => {
+  if (!img) return "";
+  if (img.startsWith("http")) return img;
+  return `${import.meta.env.VITE_API_BASE_URL}/storage/${img}`;
+};
+
 export const fetchEvents = createAsyncThunk(
   "events/fetchEvents",
   async (_, { rejectWithValue }) => {
@@ -116,7 +122,13 @@ const eventSlice = createSlice({
         state.loading = false;
         state.error = null;
         state.loadedAt = Date.now();
-        state.events = Array.isArray(action.payload) ? action.payload : [];
+
+        const items = Array.isArray(action.payload) ? action.payload : [];
+
+        state.events = items.map((e) => ({
+          ...e,
+          cover_image: normalizeImage(e.cover_image || e.image || e.banner),
+        }));
       })
       .addCase(fetchEvents.rejected, (state, action) => {
         state.status = "failed";
@@ -131,7 +143,10 @@ const eventSlice = createSlice({
         state.departmentsStatus = "succeeded";
         state.departmentsError = null;
         state.departmentsLoadedAt = Date.now();
-        state.departments = pickItems(action.payload)
+
+        const items = pickItems(action.payload);
+
+        state.departments = items
           .filter((d) => String(d?.active ?? 1) === "1")
           .map(mapDepartment)
           .filter((d) => d.uuid && d.title);

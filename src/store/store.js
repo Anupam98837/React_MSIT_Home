@@ -42,6 +42,7 @@ import scholarshipViewReducer from "../redux/crm/single/scholarshipViewSlice";
 import successStoriesViewReducer from "../redux/crm/single/successStoriesViewSlice";
 import whyUsViewReducer from "../redux/crm/single/whyUsViewSlice";
 import metaTagsReducer from "../redux/metaTagsSlice";
+import eventViewReducer from "../redux/crm/single/eventViewSlice";
 
 const store = configureStore({
   reducer: {
@@ -87,6 +88,7 @@ const store = configureStore({
     scholarshipView: scholarshipViewReducer,
     successStoriesView: successStoriesViewReducer,
     whyUsView: whyUsViewReducer,
+    eventView: eventViewReducer,
     metaTags: metaTagsReducer,
   },
 });

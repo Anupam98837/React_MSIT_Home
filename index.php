@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 header('Content-Type: text/html; charset=UTF-8');
 
-const API_BASE = 'https://preview6.tecnixs.com';
+const API_BASE = 'https://www.msit.edu.in';
 const SITE_BASE = 'https://preview8.tecnixs.com';
 
 function normalize_path(string $input): string
@@ -240,8 +240,6 @@ function build_dynamic_meta_block(array $payload): string
     append_meta_property_lines($lines, $opengraph);
     append_meta_name_lines($lines, $twitter);
     append_meta_http_equiv_lines($lines, $http);
-
-    $lines[] = '<br>';
 
     return implode("\n", $lines);
 }

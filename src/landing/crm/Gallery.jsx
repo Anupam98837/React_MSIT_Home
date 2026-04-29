@@ -12,6 +12,8 @@ import {
 
 const ALBUMS_PER_PAGE = 12;
 const PHOTOS_PER_PAGE = 18;
+const EVENTS_ENDPOINT = "/api/public/gallery-events";
+const EVENT_SHOW_ENDPOINT = "/api/public/gallery-events/__SHORTCODE__";
 
 const styles = String.raw`
 .gxa-wrap{
@@ -806,6 +808,261 @@ const renderTagChips = (tags, max = 3) => {
   return html;
 };
 
+
+const pick = (obj, keys) => {
+  for (const key of keys) {
+    const value = obj?.[key];
+    if (value !== null && value !== undefined && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return "";
+};
+
+const pickItems = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.data?.data)) return payload.data.data;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.images)) return payload.images;
+  if (Array.isArray(payload?.photos)) return payload.photos;
+  if (Array.isArray(payload?.events)) return payload.events;
+  return [];
+};
+
+const uniqueUrls = (items) => {
+  const seen = new Set();
+  const output = [];
+
+  (Array.isArray(items) ? items : []).forEach((raw) => {
+    const url = normalizeUrl(raw);
+    if (!url) return;
+
+    const key = url.toLowerCase();
+    if (seen.has(key)) return;
+
+    seen.add(key);
+    output.push(url);
+  });
+
+  return output;
+};
+
+const apiJson = async (path) => {
+  const response = await fetch(buildUrl(path), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    credentials: "same-origin",
+  });
+
+  const text = await response.text();
+  let payload = null;
+
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = { message: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || `Request failed with status ${response.status}`);
+  }
+
+  return payload;
+};
+
+const getDepartmentParam = (department) =>
+  pickText(department?.slug, department?.shortcode, department?.uuid, department?.id);
+
+const buildEventsEndpoint = (departmentParam = "") => {
+  const params = new URLSearchParams({ page: "1", per_page: "200" });
+  if (departmentParam) params.set("department", departmentParam);
+  return `${EVENTS_ENDPOINT}?${params.toString()}`;
+};
+
+const buildEventShowEndpoint = (shortcode, departmentParam = "") => {
+  const params = new URLSearchParams({ per_page: "200" });
+  if (departmentParam) params.set("department", departmentParam);
+
+  return `${EVENT_SHOW_ENDPOINT.replace("__SHORTCODE__", encodeURIComponent(shortcode))}?${params.toString()}`;
+};
+
+const extractAlbumImages = (item) => {
+  const collected = [];
+
+  const pushMaybe = (value) => {
+    if (!value) return;
+
+    if (typeof value === "string") {
+      const url = normalizeUrl(value);
+      if (url) collected.push(url);
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach(pushMaybe);
+      return;
+    }
+
+    if (typeof value === "object") {
+      const direct = pick(value, [
+        "image_url",
+        "image_full_url",
+        "cover_image_url",
+        "cover_image",
+        "url",
+        "src",
+        "image",
+        "full_url",
+        "file_url",
+        "path",
+        "thumbnail_url",
+      ]);
+
+      if (direct) pushMaybe(direct);
+
+      [
+        value.images,
+        value.photos,
+        value.media,
+        value.attachments,
+        value.gallery_images,
+        value.preview_images,
+        value.files,
+      ].forEach(pushMaybe);
+    }
+  };
+
+  pushMaybe(item?.cover_image_url);
+  pushMaybe(item?.cover_image);
+  pushMaybe(item?.image_url);
+  pushMaybe(item?.image);
+  pushMaybe(item?.event?.cover_image_url);
+  pushMaybe(item?.event?.cover_image);
+  pushMaybe(item?.event?.image_url);
+  pushMaybe(item?.event?.image);
+
+  [
+    item?.preview_images,
+    item?.images,
+    item?.photos,
+    item?.gallery_images,
+    item?.media,
+    item?.attachments,
+    item?.event?.preview_images,
+    item?.event?.images,
+    item?.event?.photos,
+    item?.event?.gallery_images,
+    item?.event?.media,
+    item?.event?.attachments,
+  ].forEach(pushMaybe);
+
+  return uniqueUrls(collected).slice(0, 12);
+};
+
+const normalizePublicAlbumCard = (item, index = 0) => {
+  const event = item?.event || {};
+  const shortcode = pickText(
+    event?.shortcode,
+    item?.event_shortcode,
+    item?.shortcode,
+    item?.code,
+    item?.slug
+  );
+  const images = extractAlbumImages(item);
+  const title = pickText(
+    event?.title,
+    item?.event_title,
+    item?.title,
+    item?.name,
+    shortcode ? "Untitled Event" : "Gallery Image"
+  );
+  const description = pickText(
+    event?.description,
+    item?.event_description,
+    item?.description,
+    item?.desc,
+    item?.summary
+  );
+  const date = pickText(
+    event?.date,
+    event?.event_date,
+    item?.event_date,
+    item?.date,
+    item?.published_at,
+    item?.created_at
+  );
+  const count =
+    parseInt(pickText(item?.images_count, item?.photos_count, item?.count), 10) ||
+    images.length ||
+    (shortcode ? 0 : 1);
+  const full = images[0] || "";
+
+  return {
+    type: shortcode ? "event" : "single",
+    key: `${shortcode ? "event" : "single"}-${shortcode || full || item?.uuid || item?.id || index}`,
+    shortcode,
+    title,
+    description: description || (shortcode ? "No description available for this event." : ""),
+    date,
+    latestCreatedAt: toTimestamp(item?.latest_created_at || item?.created_at || item?.updated_at || date),
+    imagesCount: Math.max(count, images.length),
+    previewImages: images,
+    full,
+    tags: normalizeTags(item?.tags ?? item?.tags_json),
+  };
+};
+
+const dedupeCards = (cards) => {
+  const seen = new Set();
+  const output = [];
+
+  (Array.isArray(cards) ? cards : []).forEach((card, index) => {
+    if (!card) return;
+    const key = pickText(card?.shortcode, card?.full, card?.key, `${card?.title || "card"}-${index}`).toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    output.push(card);
+  });
+
+  return output.sort((left, right) => (right.latestCreatedAt || 0) - (left.latestCreatedAt || 0));
+};
+
+const normalizePublicAlbumCards = (payload) =>
+  dedupeCards(pickItems(payload).map((item, index) => normalizePublicAlbumCard(item, index)));
+
+const normalizeDetailPhoto = (item, eventMeta = {}) => ({
+  id: item?.id ?? null,
+  uuid: pickText(item?.uuid),
+  image: pickText(item?.image),
+  image_url: pickText(item?.image_url, item?.image_full_url, item?.url, item?.src),
+  title: pickText(item?.title) || "Gallery Image",
+  description: pickText(item?.description),
+  tags: normalizeTags(item?.tags ?? item?.tags_json),
+  created_at: pickText(item?.created_at),
+  updated_at: pickText(item?.updated_at),
+  event_shortcode: pickText(item?.event_shortcode, item?.event?.shortcode, eventMeta?.shortcode),
+  event_title: pickText(item?.event_title, item?.event?.title, eventMeta?.title),
+  event_description: pickText(item?.event_description, item?.event?.description, eventMeta?.description),
+  event_date: pickText(item?.event_date, item?.event?.date, eventMeta?.date),
+});
+
+const normalizeEventShowPayload = (payload, shortcode) => {
+  const event = payload?.event || payload?.data?.event || {};
+  const eventMeta = {
+    shortcode: pickText(event?.shortcode, shortcode),
+    title: pickText(event?.title) || "Album",
+    description: pickText(event?.description),
+    date: pickText(event?.date),
+  };
+
+  const items = pickItems(payload)
+    .map((item) => normalizeDetailPhoto(item, eventMeta))
+    .filter((item) => normalizeUrl(item?.image_url || item?.image));
+
+  return { event: eventMeta, items };
+};
+
 const resolveDeptUuidFromUrl = (deptBySlug, deptByUuid) => {
   const url = new URL(window.location.href);
   const direct = pickText(url.searchParams.get("department"), url.searchParams.get("dept"));
@@ -1013,28 +1270,28 @@ function AlbumCard({ card, onOpenEvent, onOpenStandalone }) {
         ) : null}
       </div>
 
-      {card?.type === "event" ? (
-        <div className="gxa-album__body">
+      <div className="gxa-album__body">
+        {card.date ? (
           <div className="gxa-album__row">
-            {card.date ? (
-              <span className="gxa-pill gxa-pill--brand">
-                <i className="fa-regular fa-calendar" />
-                {formatDate(card.date)}
-              </span>
-            ) : null}
-          </div>
-
-          <h2 className="gxa-album__title">{card.title}</h2>
-          <div className="gxa-album__desc">{card.description}</div>
-
-          <div className="gxa-album__cta">
-            <span className="gxa-album__link">
-              <i className="fa-solid fa-arrow-right" />
-              <span>Open Album</span>
+            <span className="gxa-pill gxa-pill--brand">
+              <i className="fa-regular fa-calendar" />
+              {formatDate(card.date)}
             </span>
           </div>
+        ) : null}
+
+        <h2 className="gxa-album__title">{card.title}</h2>
+        {card.description ? (
+          <div className="gxa-album__desc">{card.description}</div>
+        ) : null}
+
+        <div className="gxa-album__cta">
+          <span className="gxa-album__link">
+            <i className={card?.type === "event" ? "fa-solid fa-arrow-right" : "fa-regular fa-eye"} />
+            <span>{card?.type === "event" ? "Open Album" : "View Image"}</span>
+          </span>
         </div>
-      ) : null}
+      </div>
     </article>
   );
 }
@@ -1099,6 +1356,13 @@ export default function Gallery() {
   const [page, setPage] = useState(1);
   const [selectedEventShortcode, setSelectedEventShortcode] = useState("");
   const [lightbox, setLightbox] = useState(null);
+  const [eventStatus, setEventStatus] = useState("idle");
+  const [eventError, setEventError] = useState("");
+  const [eventCards, setEventCards] = useState([]);
+  const [eventDetailsStatus, setEventDetailsStatus] = useState("idle");
+  const [eventDetailsError, setEventDetailsError] = useState("");
+  const [eventDetailsMeta, setEventDetailsMeta] = useState(null);
+  const [eventDetailsItems, setEventDetailsItems] = useState([]);
   const gridRef = useRef(null);
   const tileRefs = useRef([]);
 
@@ -1137,16 +1401,18 @@ export default function Gallery() {
   );
 
   const visibleItems = useMemo(
-    () => (Array.isArray(galleryItems) ? galleryItems.filter((item) => item?.visible) : []),
+    () =>
+      (Array.isArray(galleryItems) ? galleryItems : [])
+        .filter((item) => item?.visible !== false)
+        .filter((item) => normalizeUrl(item?.image_url || item?.image)),
     [galleryItems]
   );
 
   useEffect(() => {
-    const galleryReady = galleryStatus !== "idle" && galleryStatus !== "loading";
     const departmentsReady =
       departmentsStatus !== "idle" && departmentsStatus !== "loading";
 
-    if (!galleryReady || !departmentsReady || initialized) return;
+    if (!departmentsReady || initialized) return;
 
     const deptFromUrl = resolveDeptUuidFromUrl(deptBySlug, deptByUuid);
     const eventFromUrl = resolveEventFromUrl();
@@ -1160,33 +1426,80 @@ export default function Gallery() {
     }
 
     setInitialized(true);
-  }, [galleryStatus, departmentsStatus, initialized, deptBySlug, deptByUuid]);
+  }, [departmentsStatus, initialized, deptBySlug, deptByUuid]);
 
   useEffect(() => {
     if (!initialized) return;
     syncUrl(selectedDeptUuid, selectedEventShortcode, deptByUuid);
   }, [initialized, selectedDeptUuid, selectedEventShortcode, deptByUuid]);
 
-  const selectedDeptName = useMemo(() => {
-    if (!selectedDeptUuid) return "";
-    return pickText(deptByUuid.get(selectedDeptUuid)?.title);
+  const selectedDepartment = useMemo(() => {
+    if (!selectedDeptUuid) return null;
+    return deptByUuid.get(selectedDeptUuid) || null;
   }, [selectedDeptUuid, deptByUuid]);
+
+  const selectedDepartmentParam = useMemo(
+    () => getDepartmentParam(selectedDepartment),
+    [selectedDepartment]
+  );
+
+  const selectedDeptName = useMemo(() => {
+    if (!selectedDepartment) return "";
+    return pickText(selectedDepartment?.title);
+  }, [selectedDepartment]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadEventCards = async () => {
+      setEventStatus("loading");
+      setEventError("");
+
+      try {
+        const payload = await apiJson(buildEventsEndpoint(selectedDepartmentParam));
+        const cards = normalizePublicAlbumCards(payload);
+
+        if (!cancelled) {
+          setEventCards(cards);
+          setEventStatus("succeeded");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setEventCards([]);
+          setEventStatus("failed");
+          setEventError(error?.message || "Failed to load gallery event cards");
+        }
+      }
+    };
+
+    loadEventCards();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDepartmentParam]);
 
   const deptFilteredItems = useMemo(() => {
     if (!selectedDeptUuid) return visibleItems;
 
-    const selectedDepartment = deptByUuid.get(selectedDeptUuid);
     const selectedDeptId = selectedDepartment?.id != null ? String(selectedDepartment.id) : "";
 
     return visibleItems.filter((item) => {
       const itemUuid = pickText(item?.department_uuid);
       const itemId = item?.department_id != null ? String(item.department_id) : "";
+
+      // Public pages should still show common/global gallery rows with a department filter.
+      if (!itemUuid && !itemId) return true;
+
       return itemUuid === selectedDeptUuid || (selectedDeptId && itemId === selectedDeptId);
     });
-  }, [visibleItems, selectedDeptUuid, deptByUuid]);
+  }, [visibleItems, selectedDeptUuid, selectedDepartment]);
 
   const albumCards = useMemo(() => {
-    const cards = groupAlbumCards(deptFilteredItems);
+    const groupedCards = groupAlbumCards(deptFilteredItems);
+    const directCards = Array.isArray(eventCards) ? eventCards : [];
+    const cards = dedupeCards([...directCards, ...groupedCards]);
+
     if (!searchQuery) return cards;
 
     const query = searchQuery.toLowerCase();
@@ -1196,12 +1509,12 @@ export default function Gallery() {
         .join(" ");
       return haystack.includes(query);
     });
-  }, [deptFilteredItems, searchQuery]);
+  }, [eventCards, deptFilteredItems, searchQuery]);
 
   const eventItemsByShortcode = useMemo(() => {
     const map = new Map();
     deptFilteredItems.forEach((item) => {
-      const shortcode = pickText(item?.event_shortcode);
+      const shortcode = pickText(item?.event_shortcode).toLowerCase();
       if (!shortcode) return;
       if (!map.has(shortcode)) map.set(shortcode, []);
       map.get(shortcode).push(item);
@@ -1221,44 +1534,116 @@ export default function Gallery() {
     return map;
   }, [deptFilteredItems]);
 
+  const selectedAlbumCard = useMemo(() => {
+    if (!selectedEventShortcode) return null;
+    const target = selectedEventShortcode.toLowerCase();
+
+    return (
+      albumCards.find((card) => pickText(card?.shortcode).toLowerCase() === target) ||
+      null
+    );
+  }, [albumCards, selectedEventShortcode]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedEventShortcode) {
+      setEventDetailsStatus("idle");
+      setEventDetailsError("");
+      setEventDetailsMeta(null);
+      setEventDetailsItems([]);
+      return undefined;
+    }
+
+    const loadEventDetails = async () => {
+      setEventDetailsStatus("loading");
+      setEventDetailsError("");
+
+      try {
+        const payload = await apiJson(buildEventShowEndpoint(selectedEventShortcode));
+        const normalized = normalizeEventShowPayload(payload, selectedEventShortcode);
+
+        if (!cancelled) {
+          setEventDetailsMeta(normalized.event);
+          setEventDetailsItems(normalized.items);
+          setEventDetailsStatus("succeeded");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setEventDetailsMeta(null);
+          setEventDetailsItems([]);
+          setEventDetailsStatus("failed");
+          setEventDetailsError(error?.message || "Failed to load this album");
+        }
+      }
+    };
+
+    loadEventDetails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEventShortcode]);
+
+  const fallbackEventItems = useMemo(() => {
+    if (!selectedEventShortcode) return [];
+    return eventItemsByShortcode.get(selectedEventShortcode.toLowerCase()) || [];
+  }, [selectedEventShortcode, eventItemsByShortcode]);
+
   const activeEventMeta = useMemo(() => {
     if (!selectedEventShortcode) return null;
-    const items = eventItemsByShortcode.get(selectedEventShortcode) || [];
-    if (!items.length) return null;
 
-    const first = items[0];
+    if (eventDetailsMeta) {
+      return {
+        shortcode: pickText(eventDetailsMeta?.shortcode, selectedEventShortcode),
+        title: pickText(eventDetailsMeta?.title, selectedAlbumCard?.title) || "Album",
+        description: pickText(eventDetailsMeta?.description, selectedAlbumCard?.description),
+        date: pickText(eventDetailsMeta?.date, selectedAlbumCard?.date),
+        total: eventDetailsItems.length || selectedAlbumCard?.imagesCount || fallbackEventItems.length,
+      };
+    }
+
+    if (selectedAlbumCard) {
+      return {
+        shortcode: selectedEventShortcode,
+        title: pickText(selectedAlbumCard?.title) || "Album",
+        description: pickText(selectedAlbumCard?.description),
+        date: pickText(selectedAlbumCard?.date),
+        total: selectedAlbumCard?.imagesCount || fallbackEventItems.length,
+      };
+    }
+
+    const first = fallbackEventItems[0];
     return {
       shortcode: selectedEventShortcode,
       title: pickText(first?.event_title) || "Album",
       description: pickText(first?.event_description),
       date: pickText(first?.event_date),
-      total: items.length,
+      total: fallbackEventItems.length,
     };
-  }, [selectedEventShortcode, eventItemsByShortcode]);
-
-  useEffect(() => {
-    if (!selectedEventShortcode) return;
-    if (!eventItemsByShortcode.has(selectedEventShortcode)) {
-      setSelectedEventShortcode("");
-      setPage(1);
-    }
-  }, [selectedEventShortcode, eventItemsByShortcode]);
+  }, [
+    selectedEventShortcode,
+    eventDetailsMeta,
+    eventDetailsItems.length,
+    selectedAlbumCard,
+    fallbackEventItems,
+  ]);
 
   const photoItems = useMemo(() => {
     if (!selectedEventShortcode) return [];
 
-    let items = eventItemsByShortcode.get(selectedEventShortcode) || [];
-    if (!searchQuery) return items;
+    const sourceItems = eventDetailsItems.length ? eventDetailsItems : fallbackEventItems;
+    if (!searchQuery) return sourceItems;
 
     const query = searchQuery.toLowerCase();
-    return items.filter((item) => {
+    return sourceItems.filter((item) => {
       const tags = normalizeTags(item?.tags).join(" ");
       const haystack = [item?.title, item?.description, tags]
         .map((value) => pickText(value).toLowerCase())
         .join(" ");
       return haystack.includes(query);
     });
-  }, [selectedEventShortcode, eventItemsByShortcode, searchQuery]);
+  }, [selectedEventShortcode, eventDetailsItems, fallbackEventItems, searchQuery]);
 
   const isPhotosMode = Boolean(selectedEventShortcode);
   const currentItems = isPhotosMode ? photoItems : albumCards;
@@ -1273,7 +1658,13 @@ export default function Gallery() {
   }, [page, currentPage]);
 
   const loading =
-    !initialized || galleryStatus === "loading" || departmentsStatus === "loading";
+    !initialized ||
+    departmentsStatus === "loading" ||
+    (isPhotosMode
+      ? eventDetailsStatus === "loading" && !photoItems.length && !fallbackEventItems.length
+      : (eventStatus === "idle" || eventStatus === "loading") &&
+        !albumCards.length &&
+        (galleryStatus === "idle" || galleryStatus === "loading"));
 
   const applyMasonry = useCallback(() => {
     if (!gridRef.current || !isPhotosMode) return;
@@ -1425,14 +1816,20 @@ export default function Gallery() {
   }, [currentPage, lastPage]);
 
   const emptyMessage = isPhotosMode
-    ? "No photos found in this album."
-    : "No album cards found.";
+    ? eventDetailsStatus === "failed"
+      ? "Unable to load this album."
+      : "No photos found in this album."
+    : eventStatus === "failed" && galleryStatus === "failed"
+      ? "Unable to load gallery."
+      : "No album cards found.";
 
   const emptyDescription = isPhotosMode
-    ? "Try another search within this album."
-    : selectedDeptName
-      ? "Try another search or department filter."
-      : "Try another search.";
+    ? eventDetailsError || "Try another search within this album."
+    : eventError && galleryStatus === "failed"
+      ? eventError
+      : selectedDeptName
+        ? "Try another search or department filter."
+        : "Try another search.";
 
   return (
     <>
@@ -1545,8 +1942,8 @@ export default function Gallery() {
                       ) : null}
                       <span className="gxa-pill">
                         <i className="fa-regular fa-image" />
-                        {eventItemsByShortcode.get(selectedEventShortcode)?.length || 0} Photo
-                        {(eventItemsByShortcode.get(selectedEventShortcode)?.length || 0) === 1 ? "" : "s"}
+                        {activeEventMeta?.total || photoItems.length || 0} Photo
+                        {(activeEventMeta?.total || photoItems.length || 0) === 1 ? "" : "s"}
                       </span>
                     </div>
                   </div>
@@ -1586,10 +1983,10 @@ export default function Gallery() {
                       }}
                       onOpenStandalone={(singleCard) => {
                         setLightbox({
-                          src: singleCard.full,
-                          title: "",
-                          description: "",
-                          tags: [],
+                          src: singleCard.full || singleCard.previewImages?.[0] || "",
+                          title: singleCard.title || "Gallery Image",
+                          description: singleCard.description || "",
+                          tags: Array.isArray(singleCard.tags) ? singleCard.tags : [],
                         });
                       }}
                     />
