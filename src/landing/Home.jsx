@@ -16,7 +16,10 @@ import {
   DialogPanel,
   Transition,
 } from "@headlessui/react";
-import { XMarkIcon } from "@heroicons/react/24/outline";
+import {
+  ChatBubbleLeftRightIcon,
+  XMarkIcon,
+} from "@heroicons/react/24/outline";
 
 import HeaderMenu from "./components/HeaderMenu";
 import MainHeader from "./components/MainHeader";
@@ -59,6 +62,63 @@ import Enquiry from "./home/Enquiry";
 
 const SECTION_ROOT_MARGIN = "1400px 0px";
 const FOOTER_ROOT_MARGIN = "1800px 0px";
+const COOKIE_CONSENT_NAME = "msit_cookie_consent";
+const COOKIE_ANALYTICS_NAME = "msit_cookie_analytics";
+const COOKIE_MARKETING_NAME = "msit_cookie_marketing";
+const COOKIE_CONSENT_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
+const ENQUIRY_MODAL_COOKIE_NAME = "msit_enquiry_modal_seen_at";
+const ENQUIRY_MODAL_COOLDOWN_SECONDS = 24 * 60 * 60;
+const ENQUIRY_MODAL_COOLDOWN_MS = ENQUIRY_MODAL_COOLDOWN_SECONDS * 1000;
+
+const getCookieValue = (name) => {
+  if (typeof document === "undefined") return "";
+
+  const encodedName = `${encodeURIComponent(name)}=`;
+  return (
+    document.cookie
+      .split(";")
+      .map((item) => item.trim())
+      .find((item) => item.startsWith(encodedName))
+      ?.slice(encodedName.length) || ""
+  );
+};
+
+const setCookieValue = (name, value, maxAgeSeconds) => {
+  if (typeof document === "undefined") return;
+
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(
+    value
+  )}; Max-Age=${maxAgeSeconds}; Path=/; SameSite=Lax${secure}`;
+};
+
+const hasCookieChoice = () => Boolean(getCookieValue(COOKIE_CONSENT_NAME));
+
+const allowsNecessaryCookies = () =>
+  ["accepted", "custom"].includes(
+    decodeURIComponent(getCookieValue(COOKIE_CONSENT_NAME) || "")
+  );
+
+const rememberEnquiryModalSeen = () => {
+  if (!allowsNecessaryCookies()) return;
+
+  setCookieValue(
+    ENQUIRY_MODAL_COOKIE_NAME,
+    String(Date.now()),
+    ENQUIRY_MODAL_COOLDOWN_SECONDS
+  );
+};
+
+const shouldAutoOpenEnquiryModal = () => {
+  if (!allowsNecessaryCookies()) return false;
+
+  const rawValue = getCookieValue(ENQUIRY_MODAL_COOKIE_NAME);
+  const lastSeenAt = Number(decodeURIComponent(rawValue || ""));
+
+  if (!Number.isFinite(lastSeenAt) || lastSeenAt <= 0) return true;
+
+  return Date.now() - lastSeenAt > ENQUIRY_MODAL_COOLDOWN_MS;
+};
 
 function normalizeRotateLines(raw) {
   if (raw == null) return [];
@@ -221,6 +281,177 @@ function HomeEnquiryToast() {
   );
 }
 
+function HomeEnquiryButton({ onClick, hidden = false }) {
+  if (hidden) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="fixed bottom-4 right-4 z-[9998] inline-flex h-12 items-center gap-2 rounded-full border border-[rgba(255,255,255,.48)] bg-[linear-gradient(135deg,var(--primary-color,#9E363A),var(--secondary-color,#6B2528))] px-4 text-[13px] font-black uppercase tracking-[.02em] text-white shadow-[0_16px_36px_rgba(107,37,40,.30)] transition hover:-translate-y-0.5 hover:shadow-[0_20px_44px_rgba(107,37,40,.36)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(158,54,58,.35)] focus-visible:ring-offset-2"
+      aria-label="Open enquiry form"
+    >
+      <ChatBubbleLeftRightIcon className="h-5 w-5" aria-hidden="true" />
+      <span>Enquiry</span>
+    </button>
+  );
+}
+
+function ToggleSwitch({ checked, onChange, label }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative h-[28px] w-[52px] rounded-full border transition ${
+        checked
+          ? "border-[rgba(158,54,58,.40)] bg-[#9E363A]"
+          : "border-[#d7dce2] bg-white"
+      }`}
+    >
+      <span
+        className={`absolute top-[3px] h-5 w-5 rounded-full bg-white shadow-[0_4px_10px_rgba(15,23,42,.18)] transition ${
+          checked ? "left-[27px]" : "left-[4px]"
+        }`}
+      />
+    </button>
+  );
+}
+
+function CookiePreferenceRow({
+  title,
+  description,
+  required = false,
+  checked = false,
+  onChange,
+}) {
+  return (
+    <div className="flex min-h-[58px] items-center justify-between gap-3 rounded-[10px] border border-[#ead7d8] bg-[#fff8f8] px-3.5 py-2.5">
+      <div className="min-w-0">
+        <p className="m-0 text-[13px] font-black leading-[1.2] text-[#271214]">
+          {title}
+        </p>
+        <p className="m-0 mt-0.5 text-[11.5px] font-medium leading-[1.2] text-[#6b4b4d]">
+          {description}
+        </p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2.5">
+        <span className="text-[12px] font-black text-[#7d2d31]">
+          {required ? "Required" : checked ? "On" : "Off"}
+        </span>
+        {required ? (
+          <div className="relative h-[28px] w-[52px] rounded-full border border-[rgba(158,54,58,.35)] bg-[#9E363A]">
+            <span className="absolute left-[27px] top-[3px] h-5 w-5 rounded-full bg-white shadow-[0_4px_10px_rgba(15,23,42,.18)]" />
+          </div>
+        ) : (
+          <ToggleSwitch checked={checked} onChange={onChange} label={title} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CookieSettingsCard({
+  visible,
+  mode,
+  analytics,
+  marketing,
+  onAnalyticsChange,
+  onMarketingChange,
+  onCustomize,
+  onReject,
+  onAccept,
+  onSave,
+}) {
+  if (!visible) return null;
+
+  if (mode === "customize") {
+    return (
+      <div className="fixed bottom-4 right-4 z-[10030] w-[min(460px,calc(100vw-28px))] rounded-[18px] border border-[rgba(158,54,58,.18)] bg-white p-4 text-[#271214] shadow-[0_20px_54px_rgba(15,23,42,.22)] sm:p-5">
+        <p className="m-0 text-[21px] font-semibold leading-[1.2]">
+          Cookie settings
+        </p>
+        <p className="mt-4 text-[14px] font-medium leading-[1.45] text-[#594245]">
+          Our website uses cookies to distinguish you from other users of our
+          website. This helps us provide a more personalized experience when
+          you browse our website and also allows us to improve our site. You
+          can choose not to allow some types of cookies.
+        </p>
+
+        <div className="mt-4 flex flex-col gap-2.5">
+          <CookiePreferenceRow
+            title="Necessary"
+            description="Enables security and basic functionality."
+            required
+            checked
+          />
+          <CookiePreferenceRow
+            title="Analytics"
+            description="Enables tracking of site performance."
+            checked={analytics}
+            onChange={onAnalyticsChange}
+          />
+          <CookiePreferenceRow
+            title="Marketing"
+            description="Enables ads personalization and tracking."
+            checked={marketing}
+            onChange={onMarketingChange}
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={onSave}
+          className="mt-5 h-[48px] w-full rounded-[10px] bg-[linear-gradient(135deg,var(--primary-color,#9E363A),var(--secondary-color,#6B2528))] text-[16px] font-black text-white shadow-[0_12px_26px_rgba(107,37,40,.22)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(107,37,40,.28)]"
+        >
+          Save preferences
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed bottom-4 right-4 z-[10030] w-[min(460px,calc(100vw-28px))] rounded-[18px] border border-[rgba(158,54,58,.18)] bg-white p-4 text-[#271214] shadow-[0_20px_54px_rgba(15,23,42,.22)] sm:p-5">
+      <p className="m-0 text-[21px] font-semibold leading-[1.2]">
+        Cookie settings
+      </p>
+      <p className="mt-4 text-[14px] font-medium leading-[1.45] text-[#594245]">
+        We use cookies to deliver and improve our services, analyze site usage,
+        and if you agree, customize or personalize your experience. You can read
+        our Cookie Policy here.
+      </p>
+
+      <button
+        type="button"
+        onClick={onCustomize}
+        className="mt-4 h-[48px] w-full rounded-[10px] border border-[rgba(158,54,58,.28)] bg-white text-[15px] font-black text-[#7d2d31] transition hover:bg-[#fff5f5]"
+      >
+        Customize Cookie Settings
+      </button>
+
+      <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={onReject}
+          className="h-[48px] rounded-[10px] border border-[rgba(158,54,58,.28)] bg-white text-[15px] font-black text-[#7d2d31] transition hover:bg-[#fff5f5]"
+        >
+          Reject All Cookies
+        </button>
+        <button
+          type="button"
+          onClick={onAccept}
+          className="h-[48px] rounded-[10px] bg-[linear-gradient(135deg,var(--primary-color,#9E363A),var(--secondary-color,#6B2528))] text-[15px] font-black text-white shadow-[0_12px_26px_rgba(107,37,40,.22)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(107,37,40,.28)]"
+        >
+          Accept All Cookies
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const dispatch = useDispatch();
   const location = useLocation();
@@ -299,6 +530,12 @@ export default function Home() {
 
   const [popupRotateIndex, setPopupRotateIndex] = useState(0);
   const [popupRotateFading, setPopupRotateFading] = useState(false);
+  const [cookieCardVisible, setCookieCardVisible] = useState(
+    () => !hasCookieChoice()
+  );
+  const [cookieCardMode, setCookieCardMode] = useState("compact");
+  const [analyticsCookies, setAnalyticsCookies] = useState(false);
+  const [marketingCookies, setMarketingCookies] = useState(false);
 
   const popupSubText =
     popupRotateLines[popupRotateIndex] ||
@@ -345,8 +582,73 @@ export default function Home() {
     }, 160);
   };
 
+  const handleOpenEnquiryModal = () => {
+    dispatch(openEnquiryModal());
+  };
+
+  const handleCloseEnquiryModal = () => {
+    rememberEnquiryModalSeen();
+    dispatch(closeEnquiryModal());
+  };
+
+  const saveCookieChoice = ({ consent, analytics = false, marketing = false }) => {
+    setCookieValue(COOKIE_CONSENT_NAME, consent, COOKIE_CONSENT_MAX_AGE_SECONDS);
+    setCookieValue(
+      COOKIE_ANALYTICS_NAME,
+      String(Boolean(analytics)),
+      COOKIE_CONSENT_MAX_AGE_SECONDS
+    );
+    setCookieValue(
+      COOKIE_MARKETING_NAME,
+      String(Boolean(marketing)),
+      COOKIE_CONSENT_MAX_AGE_SECONDS
+    );
+    setCookieCardVisible(false);
+  };
+
+  const handleAcceptAllCookies = () => {
+    setAnalyticsCookies(true);
+    setMarketingCookies(true);
+    saveCookieChoice({
+      consent: "accepted",
+      analytics: true,
+      marketing: true,
+    });
+  };
+
+  const handleRejectAllCookies = () => {
+    setAnalyticsCookies(false);
+    setMarketingCookies(false);
+    saveCookieChoice({
+      consent: "rejected",
+      analytics: false,
+      marketing: false,
+    });
+  };
+
+  const handleSaveCookiePreferences = () => {
+    saveCookieChoice({
+      consent: "custom",
+      analytics: analyticsCookies,
+      marketing: marketingCookies,
+    });
+  };
+
+  useEffect(() => {
+    setCookieCardVisible(!hasCookieChoice());
+    setAnalyticsCookies(
+      decodeURIComponent(getCookieValue(COOKIE_ANALYTICS_NAME) || "") === "true"
+    );
+    setMarketingCookies(
+      decodeURIComponent(getCookieValue(COOKIE_MARKETING_NAME) || "") === "true"
+    );
+  }, []);
+
   useEffect(() => {
     if (!loaderDone || popupOpenedOnceRef.current) return;
+    if (cookieCardVisible) return;
+    if (!shouldAutoOpenEnquiryModal()) return;
+
     popupOpenedOnceRef.current = true;
 
     const timer = window.setTimeout(() => {
@@ -383,13 +685,29 @@ export default function Home() {
       />
 
       <HomeEnquiryToast />
+      <CookieSettingsCard
+        visible={cookieCardVisible}
+        mode={cookieCardMode}
+        analytics={analyticsCookies}
+        marketing={marketingCookies}
+        onAnalyticsChange={setAnalyticsCookies}
+        onMarketingChange={setMarketingCookies}
+        onCustomize={() => setCookieCardMode("customize")}
+        onReject={handleRejectAllCookies}
+        onAccept={handleAcceptAllCookies}
+        onSave={handleSaveCookiePreferences}
+      />
+      <HomeEnquiryButton
+        hidden={cookieCardVisible || isEnquiryModalOpen || loaderVisible}
+        onClick={handleOpenEnquiryModal}
+      />
 
       <Transition appear show={isEnquiryModalOpen} as={Fragment}>
         <Dialog
           as="div"
           className="relative z-[10000]"
           open={isEnquiryModalOpen}
-          onClose={() => dispatch(closeEnquiryModal())}
+          onClose={handleCloseEnquiryModal}
         >
           <DialogBackdrop
             transition
@@ -446,7 +764,7 @@ export default function Home() {
                   <button
                     type="button"
                     aria-label="Close"
-                    onClick={() => dispatch(closeEnquiryModal())}
+                    onClick={handleCloseEnquiryModal}
                     className="inline-flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-xl border border-[rgba(2,6,23,.12)] bg-[rgba(255,255,255,.94)] text-slate-700 transition hover:bg-slate-100"
                   >
                     <XMarkIcon className="h-5 w-5" />
@@ -456,7 +774,7 @@ export default function Home() {
                 <div className="relative min-h-0 flex-1 overflow-auto px-[14px] pb-[14px] sm:px-[18px] sm:pb-[18px]">
                   <Enquiry
                     isOpen={isEnquiryModalOpen}
-                    onSubmitted={() => dispatch(closeEnquiryModal())}
+                    onSubmitted={handleCloseEnquiryModal}
                     useGlobalToast={true}
                   />
                 </div>

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 header('Content-Type: text/html; charset=UTF-8');
 
-const API_BASE = 'https://www.msit.edu.in';
+const API_BASE = 'https://preview6.tecnixs.com';
 const SITE_BASE = 'https://preview8.tecnixs.com';
 
 function normalize_path(string $input): string

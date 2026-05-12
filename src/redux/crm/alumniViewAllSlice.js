@@ -6,7 +6,7 @@ import {
   shouldFetchBlock,
 } from "../request";
 
-const ALUMNI_PATH = "/api/alumni";
+const ALUMNI_PATH = "/api/alumni/public/index";
 const DEPT_PATH = "/api/public/departments";
 
 const withQuery = (path, params) => `${path}?${new URLSearchParams(params).toString()}`;

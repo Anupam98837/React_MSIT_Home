@@ -8,7 +8,7 @@ import {
 
 export const ALL_DEPTS = "__all";
 
-const TOPPERS_PATH = "/api/program-toppers";
+const TOPPERS_PATH = "/api/program-toppers/public/index";
 const DEPTS_PATH = "/api/public/departments";
 
 const withQuery = (path, params) => `${path}?${new URLSearchParams(params).toString()}`;

@@ -470,6 +470,7 @@ const styles = String.raw`
   line-height: 1.4;
   text-shadow: 0 2px 12px rgba(0,0,0,.35);
   max-width: 360px;
+  white-space: pre-wrap;
 }
 
 .alx-modal__hero-placeholder{
@@ -591,6 +592,7 @@ const styles = String.raw`
   color: #1e293b;
   line-height: 1.3;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 .alx-mfield-full{
   grid-column: 1 / -1;
@@ -734,27 +736,6 @@ html.theme-dark .alx-mnote-val{ color: #cbd5e1; }
 }
 `;
 
-const esc = (str) =>
-  (str ?? "").toString().replace(/[&<>"']/g, (s) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[s]));
-
-const escAttr = (str) => (str ?? "").toString().replace(/"/g, "&quot;");
-
-const normalizeUrl = (url) => {
-  const u = (url || "").toString().trim();
-  if (!u) return "";
-  if (/^(data:|blob:|https?:\/\/|mailto:|tel:)/i.test(u)) return u;
-  if (u.startsWith("//")) return "https:" + u;
-  if (u.startsWith("/")) return ORIGIN + u;
-  if (u.includes(".") && !u.includes(" ")) return "https://" + u.replace(/^\/+/, "");
-  return ORIGIN + "/" + u.replace(/^\/+/, "");
-};
-
 const decodeMaybeJson = (v) => {
   if (v == null) return null;
   if (Array.isArray(v) || typeof v === "object") return v;
@@ -765,16 +746,126 @@ const decodeMaybeJson = (v) => {
   }
 };
 
+const decodeHtmlEntities = (value) => {
+  const str = String(value ?? "");
+  if (!str) return "";
+
+  if (typeof document !== "undefined") {
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = str;
+    return textarea.value;
+  }
+
+  return str
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+};
+
+const stripHtmlToText = (value) => {
+  let str = decodeHtmlEntities(value);
+
+  str = str
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, "\n")
+    .replace(/<\s*li[^>]*>/gi, "• ")
+    .replace(/<[^>]*>/g, "");
+
+  str = decodeHtmlEntities(str)
+    .replace(/\u00a0/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const emptyHtmlValues = new Set([
+    "",
+    "<br>",
+    "<br/>",
+    "<br />",
+    "&nbsp;",
+    "<p><br></p>",
+    "<p><br /></p>",
+  ]);
+
+  if (emptyHtmlValues.has(String(value ?? "").trim().toLowerCase())) return "";
+  return str;
+};
+
+const toDisplayText = (value) => {
+  if (value == null) return "";
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(toDisplayText).filter(Boolean).join(", ");
+  }
+
+  if (typeof value === "object") {
+    const preferredKeys = [
+      "name",
+      "title",
+      "label",
+      "value",
+      "text",
+      "html",
+      "content",
+      "description",
+      "designation",
+      "role",
+      "company",
+      "city",
+      "country",
+      "year",
+    ];
+
+    for (const key of preferredKeys) {
+      if (value?.[key] !== null && value?.[key] !== undefined) {
+        const text = toDisplayText(value[key]);
+        if (text) return text;
+      }
+    }
+
+    return "";
+  }
+
+  const parsed = decodeMaybeJson(value);
+  if (parsed && typeof parsed === "object") {
+    const text = toDisplayText(parsed);
+    if (text) return text;
+  }
+
+  return stripHtmlToText(value);
+};
+
+const normalizeUrl = (url) => {
+  const u = toDisplayText(url).trim();
+  if (!u) return "";
+  if (/^(data:|blob:|https?:\/\/|mailto:|tel:)/i.test(u)) return u;
+  if (u.startsWith("//")) return "https:" + u;
+  if (u.startsWith("/")) return ORIGIN + u;
+  if (u.includes(".") && !u.includes(" ")) return "https://" + u.replace(/^\/+/, "");
+  return ORIGIN + "/" + u.replace(/^\/+/, "");
+};
+
+const safeCssUrl = (url) => String(url || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+
 const pick = (obj, keys) => {
   for (const k of keys) {
     const v = obj?.[k];
-    if (v !== null && v !== undefined && String(v).trim() !== "") return v;
+    const text = toDisplayText(v);
+    if (text) return text;
   }
   return "";
 };
 
 const initials = (name) => {
-  const n = (name || "").trim();
+  const n = toDisplayText(name).trim();
   if (!n) return "AL";
   const parts = n.split(/\s+/).filter(Boolean).slice(0, 2);
   return parts.map((p) => p[0].toUpperCase()).join("");
@@ -783,96 +874,112 @@ const initials = (name) => {
 const getMeta = (item) => decodeMaybeJson(item?.metadata) || {};
 
 const resolveName = (item) =>
-  String(
-    pick(item, ["user_name", "alumni_name", "name", "full_name", "student_name"]) ||
-      pick(item?.user, ["name", "full_name", "username"]) ||
-      "Alumni"
-  );
+  pick(item, ["user_name", "alumni_name", "name", "full_name", "student_name"]) ||
+  pick(item?.user, ["name", "full_name", "username"]) ||
+  "Alumni";
 
 const resolveDepartmentName = (item) =>
-  String(
-    pick(item, ["department_title", "department_name"]) ||
-      pick(item?.department, ["title", "name"]) ||
-      ""
-  );
+  pick(item, ["department_title", "department_name"]) ||
+  pick(item?.department, ["title", "name"]) ||
+  "";
 
 const resolveDepartmentId = (item) =>
-  String(
-    pick(item, ["department_id", "dept_id"]) ||
-      pick(item?.department, ["id"]) ||
-      ""
-  );
+  pick(item, ["department_id", "dept_id"]) ||
+  pick(item?.department, ["id"]) ||
+  "";
 
 const resolveDepartmentUuid = (item) =>
-  String(
-    pick(item, ["department_uuid", "dept_uuid"]) ||
-      pick(item?.department, ["uuid"]) ||
-      ""
-  );
+  pick(item, ["department_uuid", "dept_uuid"]) ||
+  pick(item?.department, ["uuid"]) ||
+  "";
 
 const resolveProgram = (item) =>
-  String(pick(item, ["program", "degree", "course"]) || pick(getMeta(item), ["program", "degree"]) || "");
+  pick(item, ["program", "degree", "course"]) ||
+  pick(getMeta(item), ["program", "degree"]) ||
+  "";
 
 const resolveSpecialization = (item) =>
-  String(pick(item, ["specialization", "branch", "stream"]) || pick(getMeta(item), ["specialization", "branch"]) || "");
+  pick(item, ["specialization", "branch", "stream"]) ||
+  pick(getMeta(item), ["specialization", "branch"]) ||
+  "";
 
 const resolveAdmissionYear = (item) =>
-  String(
-    pick(item, ["admission_year", "start_year", "joining_year", "batch_start_year"]) ||
-      pick(getMeta(item), ["admission_year"]) ||
-      ""
-  );
+  pick(item, ["admission_year", "start_year", "joining_year", "batch_start_year"]) ||
+  pick(getMeta(item), ["admission_year"]) ||
+  "";
 
 const resolvePassingYear = (item) =>
-  String(
-    pick(item, ["passing_year", "passout_year", "graduation_year", "completion_year", "batch_end_year"]) ||
-      pick(getMeta(item), ["passing_year", "passout_year"]) ||
-      ""
-  );
+  pick(item, ["passing_year", "passout_year", "graduation_year", "completion_year", "batch_end_year"]) ||
+  pick(getMeta(item), ["passing_year", "passout_year"]) ||
+  "";
 
 const resolveCompany = (item) =>
-  String(pick(item, ["current_company", "company", "company_name"]) || pick(getMeta(item), ["company", "current_company"]) || "");
+  pick(item, ["current_company", "company", "company_name"]) ||
+  pick(getMeta(item), ["company", "current_company"]) ||
+  "";
 
 const resolveRoleTitle = (item) =>
-  String(
-    pick(item, ["current_role_title", "current_role", "designation", "role_title", "job_title", "position"]) ||
-      pick(getMeta(item), ["role_title", "designation"]) ||
-      ""
-  );
+  pick(item, ["current_role_title", "current_role", "designation", "role_title", "job_title", "position"]) ||
+  pick(getMeta(item), ["role_title", "designation"]) ||
+  "";
 
 const resolveIndustry = (item) =>
-  String(pick(item, ["industry", "sector"]) || pick(getMeta(item), ["industry"]) || "");
+  pick(item, ["industry", "sector"]) ||
+  pick(getMeta(item), ["industry"]) ||
+  "";
 
 const resolveCity = (item) =>
-  String(pick(item, ["city", "current_city"]) || pick(getMeta(item), ["city"]) || "");
+  pick(item, ["city", "current_city"]) ||
+  pick(getMeta(item), ["city"]) ||
+  "";
 
 const resolveCountry = (item) =>
-  String(pick(item, ["country", "current_country"]) || pick(getMeta(item), ["country"]) || "");
+  pick(item, ["country", "current_country"]) ||
+  pick(getMeta(item), ["country"]) ||
+  "";
 
 const resolveSkills = (item) => {
-  const s = getMeta(item)?.skills;
-  if (Array.isArray(s)) return s.map((x) => String(x || "").trim()).filter(Boolean);
-  return [];
+  const raw = item?.skills ?? getMeta(item)?.skills;
+
+  if (Array.isArray(raw)) {
+    return raw.map(toDisplayText).filter(Boolean);
+  }
+
+  const parsed = decodeMaybeJson(raw);
+  if (Array.isArray(parsed)) {
+    return parsed.map(toDisplayText).filter(Boolean);
+  }
+
+  const text = toDisplayText(raw);
+  if (!text) return [];
+
+  return text
+    .split(/[,|]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
 };
 
 const resolveNote = (item) =>
-  String(pick(item, ["note", "about", "bio", "summary"]) || pick(getMeta(item), ["note", "about"]) || "");
+  pick(item, ["note", "about", "bio", "summary"]) ||
+  pick(getMeta(item), ["note", "about", "bio", "summary"]) ||
+  "";
 
 const resolveImage = (item) => {
   const img =
     pick(item, ["user_image", "image", "image_url", "photo_url", "profile_image_url", "avatar_url"]) ||
     pick(item?.user, ["image", "photo_url", "image_url"]) ||
     "";
+
   return normalizeUrl(img);
 };
 
 const looksLikeUuidLoose = (v) =>
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || "").trim());
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || "").trim());
 
 const resolveKey = (item) => {
-  const u = String(pick(item, ["uuid", "alumni_uuid"]) || "").trim();
+  const u = pick(item, ["uuid", "alumni_uuid"]).trim();
   if (looksLikeUuidLoose(u)) return u;
-  const id = String(pick(item, ["id", "alumni_id"]) || "").trim();
+  const id = pick(item, ["id", "alumni_id"]).trim();
   return id ? `id:${id}` : "";
 };
 
@@ -925,10 +1032,11 @@ const ensureFontAwesome = () => {
 };
 
 const renderLine = (label, value) => {
-  const v = (value || "").toString().trim();
+  const v = toDisplayText(value);
   if (!v) return null;
+
   return (
-    <div className="alx-mfield">
+    <div className="alx-mfield" key={label}>
       <div className="alx-mfield-label">
         <i className="fa-solid fa-circle-info"></i>
         {label}
@@ -978,8 +1086,11 @@ export default function Alumni() {
   }, [departments]);
 
   const selectedDeptMeta = selectedDeptUuid ? deptByUuid.get(selectedDeptUuid) || null : null;
-  const selectedDeptId = selectedDeptMeta?.id !== null && selectedDeptMeta?.id !== undefined ? String(selectedDeptMeta.id) : "";
-  const selectedDeptName = selectedDeptMeta?.title || "";
+  const selectedDeptId =
+    selectedDeptMeta?.id !== null && selectedDeptMeta?.id !== undefined
+      ? String(selectedDeptMeta.id)
+      : "";
+  const selectedDeptName = toDisplayText(selectedDeptMeta?.title || "");
 
   useEffect(() => {
     if (!requestsStarted || initialized) return;
@@ -1132,54 +1243,9 @@ export default function Alumni() {
     }
   };
 
-  const modalHero = activeItem ? (() => {
-    const name = resolveName(activeItem);
-    const company = resolveCompany(activeItem);
-    const role = resolveRoleTitle(activeItem);
-    const city = resolveCity(activeItem);
-    const country = resolveCountry(activeItem);
-    const location = [city, country].filter(Boolean).join(", ");
-    const note = resolveNote(activeItem);
-    const img = resolveImage(activeItem);
+  const activeData = useMemo(() => {
+    if (!activeItem) return null;
 
-    const heroSub = [];
-    if (role && company) heroSub.push(`${role} · ${company}${location ? ", " + location : ""}`);
-    else if (company) heroSub.push(company + (location ? ", " + location : ""));
-    else if (role) heroSub.push(role + (location ? ", " + location : ""));
-    else if (location) heroSub.push(location);
-
-    const heroSubHtml = heroSub.length
-      ? heroSub.map((s) => `<span>${esc(s)}</span>`).join('<span class="sep">•</span>')
-      : "";
-
-    const quoteHtml = note ? `<div class="alx-modal__hero-quote">"${esc(note)}"</div>` : "";
-
-    if (img) {
-      return `
-        <img class="alx-modal__hero-img" src="${escAttr(img)}" alt="${escAttr(name)} photo">
-        <div class="alx-modal__hero-grad"></div>
-        <div class="alx-modal__hero-info">
-          <h2 class="alx-modal__hero-name">${esc(name)}</h2>
-          ${heroSubHtml ? `<div class="alx-modal__hero-sub">${heroSubHtml}</div>` : ""}
-          ${quoteHtml}
-        </div>
-      `;
-    }
-
-    return `
-      <div class="alx-modal__hero-placeholder">
-        <div class="alx-modal__hero-initials">${esc(initials(name))}</div>
-      </div>
-      <div class="alx-modal__hero-grad"></div>
-      <div class="alx-modal__hero-info">
-        <h2 class="alx-modal__hero-name">${esc(name)}</h2>
-        ${heroSubHtml ? `<div class="alx-modal__hero-sub">${heroSubHtml}</div>` : ""}
-        ${quoteHtml}
-      </div>
-    `;
-  })() : "";
-
-  const modalDetails = activeItem ? (() => {
     const name = resolveName(activeItem);
     const company = resolveCompany(activeItem);
     const role = resolveRoleTitle(activeItem);
@@ -1187,100 +1253,47 @@ export default function Alumni() {
     const city = resolveCity(activeItem);
     const country = resolveCountry(activeItem);
     const location = [city, country].filter(Boolean).join(", ");
-    const skills = resolveSkills(activeItem);
     const note = resolveNote(activeItem);
     const dept = resolveDepartmentName(activeItem);
+    const img = resolveImage(activeItem);
+    const skills = resolveSkills(activeItem);
+
+    const heroSubParts = [];
+    if (role && company) heroSubParts.push(`${role} · ${company}${location ? ", " + location : ""}`);
+    else if (company) heroSubParts.push(company + (location ? ", " + location : ""));
+    else if (role) heroSubParts.push(role + (location ? ", " + location : ""));
+    else if (location) heroSubParts.push(location);
 
     const tagParts = [];
     if (dept) tagParts.push(dept);
     if (role || company) tagParts.push([role, company].filter(Boolean).join(" · "));
     if (location) tagParts.push(location);
 
-    const tagHtml = tagParts.length
-      ? tagParts.map((t) => `<span>${esc(t)}</span>`).join('<span class="tsep">•</span>')
-      : "";
+    return {
+      name,
+      company,
+      role,
+      industry,
+      city,
+      country,
+      location,
+      note,
+      dept,
+      img,
+      skills,
+      heroSubParts,
+      tagParts,
+    };
+  }, [activeItem]);
 
-    const profFields = [
-      renderLine("Company", company),
-      renderLine("Role / Designation", role),
-      renderLine("Industry", industry),
-      renderLine("Location", location),
-    ].filter(Boolean);
-
-    const skillsHtml = skills.length
-      ? `
-        <div class="alx-mfield alx-mfield-full">
-          <div class="alx-mfield-label">
-            <i class="fa-solid fa-wand-magic-sparkles"></i>
-            Skills
-          </div>
-          <div class="alx-mfield-val">
-            <div class="alx-mchips">
-              ${skills
-                .map(
-                  (s) => `
-                    <span class="alx-mchip">
-                      <i class="fa-solid fa-check"></i>
-                      ${esc(s)}
-                    </span>
-                  `
-                )
-                .join("")}
-            </div>
-          </div>
-        </div>
-      `
-      : "";
-
-    const noteHtml = note
-      ? `
-        <div class="alx-mnote">
-          <div class="alx-mnote-label"><i class="fa-solid fa-quote-left"></i>About</div>
-          <div class="alx-mnote-val">${esc(note)}</div>
-        </div>
-      `
-      : "";
-
-    return `
-      <div class="alx-modal__dhead">
-        <h2 class="alx-modal__dhead-name">${esc(name)}</h2>
-        ${tagHtml ? `<div class="alx-modal__dhead-tagline">${tagHtml}</div>` : ""}
-      </div>
-      <div class="alx-modal__dcontent">
-        ${
-          profFields.length
-            ? `
-              <div class="alx-msection">
-                <div class="alx-msection-title">Professional</div>
-                <div class="alx-mrow">
-                  ${profFields.join("")}
-                </div>
-              </div>
-            `
-            : ""
-        }
-        ${
-          skillsHtml
-            ? `
-              <div class="alx-msection">
-                <div class="alx-msection-title">Skills</div>
-                <div class="alx-mrow">${skillsHtml}</div>
-              </div>
-            `
-            : ""
-        }
-        ${
-          noteHtml
-            ? `
-              <div class="alx-msection">
-                ${noteHtml}
-              </div>
-            `
-            : ""
-        }
-      </div>
-    `;
-  })() : "";
+  const professionalFields = activeData
+    ? [
+        renderLine("Company", activeData.company),
+        renderLine("Role / Designation", activeData.role),
+        renderLine("Industry", activeData.industry),
+        renderLine("Location", activeData.location),
+      ].filter(Boolean)
+    : [];
 
   return (
     <div className="alx-wrap">
@@ -1316,10 +1329,10 @@ export default function Alumni() {
               <option value="">All Departments</option>
               {departments
                 .slice()
-                .sort((a, b) => a.title.localeCompare(b.title))
+                .sort((a, b) => toDisplayText(a.title).localeCompare(toDisplayText(b.title)))
                 .map((d) => (
                   <option key={d.uuid} value={d.uuid}>
-                    {d.title}
+                    {toDisplayText(d.title)}
                   </option>
                 ))}
             </select>
@@ -1341,7 +1354,7 @@ export default function Alumni() {
           </div>
           Unable to load alumni right now.
           <div style={{ marginTop: "8px", fontSize: "12.5px", opacity: 0.95 }}>
-            <b>Error:</b> {alumniError}
+            <b>Error:</b> {toDisplayText(alumniError)}
           </div>
         </div>
       ) : currentItems.length ? (
@@ -1378,9 +1391,7 @@ export default function Alumni() {
               const subParts = [];
               if (program && !(company || role)) subParts.push(program);
               if (admissionYear) {
-                subParts.push(
-                  `Batch: ${admissionYear}${passingYear ? "–" + passingYear : ""}`
-                );
+                subParts.push(`Batch: ${admissionYear}${passingYear ? "–" + passingYear : ""}`);
               } else if (passingYear) {
                 subParts.push(`Passout: ${passingYear}`);
               }
@@ -1412,7 +1423,7 @@ export default function Alumni() {
                   {img ? (
                     <div
                       className="bg"
-                      style={{ backgroundImage: `url('${escAttr(img)}')` }}
+                      style={{ backgroundImage: `url("${safeCssUrl(img)}")` }}
                     />
                   ) : (
                     <div className="alx-placeholder">
@@ -1536,8 +1547,22 @@ export default function Alumni() {
         </>
       ) : (
         <div className="alx-state">
-          <div aria-hidden="true" style={{ width: "170px", maxWidth: "100%", margin: "0 auto 10px", display: "block", color: "var(--alx-brand)" }}>
-            <svg viewBox="0 0 220 140" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: "block", width: "100%", height: "auto" }}>
+          <div
+            aria-hidden="true"
+            style={{
+              width: "170px",
+              maxWidth: "100%",
+              margin: "0 auto 10px",
+              display: "block",
+              color: "var(--alx-brand)",
+            }}
+          >
+            <svg
+              viewBox="0 0 220 140"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              style={{ display: "block", width: "100%", height: "auto" }}
+            >
               <rect x="10" y="18" width="200" height="112" rx="16" fill="white" stroke="rgba(15,23,42,0.10)" />
               <rect x="24" y="32" width="172" height="84" rx="12" fill="rgba(148,163,184,0.08)" stroke="rgba(148,163,184,0.18)" />
               <circle cx="70" cy="66" r="16" fill="rgba(158,54,58,0.14)" stroke="currentColor" strokeWidth="2" />
@@ -1563,6 +1588,7 @@ export default function Alumni() {
         onClick={closeModal}
       >
         <div className="alx-modal__overlay" data-close="1"></div>
+
         <div
           className="alx-modal__panel"
           role="document"
@@ -1578,8 +1604,110 @@ export default function Alumni() {
             <i className="fa-solid fa-xmark"></i>
           </button>
 
-          <div className="alx-modal__hero" dangerouslySetInnerHTML={{ __html: modalHero }} />
-          <div className="alx-modal__details" dangerouslySetInnerHTML={{ __html: modalDetails }} />
+          <div className="alx-modal__hero">
+            {activeData?.img ? (
+              <img
+                className="alx-modal__hero-img"
+                src={activeData.img}
+                alt={`${activeData.name} photo`}
+              />
+            ) : (
+              <div className="alx-modal__hero-placeholder">
+                <div className="alx-modal__hero-initials">
+                  {initials(activeData?.name)}
+                </div>
+              </div>
+            )}
+
+            <div className="alx-modal__hero-grad"></div>
+
+            {activeData ? (
+              <div className="alx-modal__hero-info">
+                <h2 className="alx-modal__hero-name">{activeData.name}</h2>
+
+                {activeData.heroSubParts.length ? (
+                  <div className="alx-modal__hero-sub">
+                    {activeData.heroSubParts.map((part, index) => (
+                      <span key={`${part}-${index}`}>
+                        {index > 0 ? <span className="sep">•</span> : null}
+                        {part}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
+                {activeData.note ? (
+                  <div className="alx-modal__hero-quote">“{activeData.note}”</div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="alx-modal__details">
+            {activeData ? (
+              <>
+                <div className="alx-modal__dhead">
+                  <h2 className="alx-modal__dhead-name">{activeData.name}</h2>
+
+                  {activeData.tagParts.length ? (
+                    <div className="alx-modal__dhead-tagline">
+                      {activeData.tagParts.map((part, index) => (
+                        <span key={`${part}-${index}`}>
+                          {index > 0 ? <span className="tsep">•</span> : null}
+                          {part}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="alx-modal__dcontent">
+                  {professionalFields.length ? (
+                    <div className="alx-msection">
+                      <div className="alx-msection-title">Professional</div>
+                      <div className="alx-mrow">{professionalFields}</div>
+                    </div>
+                  ) : null}
+
+                  {activeData.skills.length ? (
+                    <div className="alx-msection">
+                      <div className="alx-msection-title">Skills</div>
+                      <div className="alx-mrow">
+                        <div className="alx-mfield alx-mfield-full">
+                          <div className="alx-mfield-label">
+                            <i className="fa-solid fa-wand-magic-sparkles"></i>
+                            Skills
+                          </div>
+                          <div className="alx-mfield-val">
+                            <div className="alx-mchips">
+                              {activeData.skills.map((skill, index) => (
+                                <span className="alx-mchip" key={`${skill}-${index}`}>
+                                  <i className="fa-solid fa-check"></i>
+                                  {skill}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {activeData.note ? (
+                    <div className="alx-msection">
+                      <div className="alx-mnote">
+                        <div className="alx-mnote-label">
+                          <i className="fa-solid fa-quote-left"></i>
+                          About
+                        </div>
+                        <div className="alx-mnote-val">{activeData.note}</div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
